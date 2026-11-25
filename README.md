@@ -5,7 +5,8 @@ stage adds: BM25 vs dense vs Qdrant hybrid vs hybrid + cross-encoder reranking. 
 retrieval metrics and per-stage latency, all on one laptop GPU.
 
 **Status:** M1 (retrieval ablation) is done. Reranking, generation with vLLM, RAGAS, the
-validated LLM judge, Langfuse tracing and the API come next; see [docs/PLAN.md](docs/PLAN.md).
+validated LLM judge, Langfuse tracing and the API come next; see the
+[milestones](https://github.com/Arjun-Sivasankar/clinical-rag-eval/milestones).
 
 ## Results (retrieval, 1,000 PubMedQA questions, 62,249-abstract corpus)
 
@@ -79,7 +80,6 @@ encoders): `python -m pytest`.
 src/clinical_rag/   data.py chunking.py encoders.py index.py retrieve.py metrics.py evaluate.py cli.py
 results/            metrics JSON + Markdown per run, runs/*.jsonl (gold rank and top 10 per query)
 tests/              pytest suite (data loading, chunking, metrics, retrieval on in-memory Qdrant)
-docs/PLAN.md        milestones, model choices for 8 GB VRAM, risks
 ```
 
 ## Data and model licences
