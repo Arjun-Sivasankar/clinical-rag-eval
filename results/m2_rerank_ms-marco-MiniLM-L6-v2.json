@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "n_docs": 62249,
+    "n_chunks": 207664,
+    "n_queries": 1000,
+    "chunk_words_mean": 59.58069766545959,
+    "chunk_words_p95": 132.0,
+    "label_counts": {
+      "yes": 552,
+      "no": 338,
+      "maybe": 110
+    },
+    "dense_model": "BAAI/bge-small-en-v1.5",
+    "sparse_model": "Qdrant/bm25",
+    "bm25_avg_len": 42.41540661838354,
+    "qdrant_location": "http://localhost:6333",
+    "qdrant_server": "1.20.0",
+    "chunk_limit": 100,
+    "prefetch_limit": 100,
+    "device": "cuda",
+    "reranker": "cross-encoder/ms-marco-MiniLM-L6-v2",
+    "rerank_depth": 50,
+    "rerank_parents": 20,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.12.11",
+      "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+      "torch": "2.11.0+cu128",
+      "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "gpu_vram_gb": 8.0,
+      "qdrant-client": "1.20.0",
+      "sentence-transformers": "6.3.0",
+      "fastembed": "0.9.1"
+    },
+    "finished_utc": "2026-11-25T18:36:02+00:00"
+  },
+  "summaries": [
+    {
+      "system": "hybrid_dbsf",
+      "n_queries": 1000,
+      "recall@1": 0.843,
+      "recall@5": 0.958,
+      "recall@10": 0.972,
+      "recall@20": 0.981,
+      "mrr@10": 0.8934,
+      "ndcg@10": 0.9129235688371112,
+      "latency_ms": {
+        "embed_dense": {
+          "p50": 18.36085005197674,
+          "p95": 31.645899976138022
+        },
+        "embed_sparse": {
+          "p50": 0.10014988947659731,
+          "p95": 0.17470981692895293
+        },
+        "search": {
+          "p50": 19.106600084342062,
+          "p95": 31.26731489319353
+        },
+        "total": {
+          "p50": 38.58924994710833,
+          "p95": 55.91567481169476
+        }
+      }
+    },
+    {
+      "system": "hybrid_dbsf+rerank",
+      "n_queries": 1000,
+      "recall@1": 0.832,
+      "recall@5": 0.939,
+      "recall@10": 0.963,
+      "recall@20": 0.977,
+      "mrr@10": 0.8803448412698412,
+      "ndcg@10": 0.9006368154835859,
+      "latency_ms": {
+        "embed_dense": {
+          "p50": 18.94905010703951,
+          "p95": 35.12314981780946
+        },
+        "embed_sparse": {
+          "p50": 0.10229996405541897,
+          "p95": 0.20083012059330937
+        },
+        "search": {
+          "p50": 19.14530002977699,
+          "p95": 32.61769003001973
+        },
+        "total": {
+          "p50": 79.91395005956292,
+          "p95": 116.94582987111062
+        },
+        "rerank": {
+          "p50": 40.73544999118894,
+          "p95": 63.59186514746396
+        }
+      }
+    },
+    {
+      "system": "hybrid_dbsf+rerank_parent",
+      "n_queries": 1000,
+      "recall@1": 0.864,
+      "recall@5": 0.959,
+      "recall@10": 0.974,
+      "recall@20": 0.981,
+      "mrr@10": 0.9053361111111111,
+      "ndcg@10": 0.9222890186430802,
+      "latency_ms": {
+        "embed_dense": {
+          "p50": 18.705649999901652,
+          "p95": 33.88925013132393
+        },
+        "embed_sparse": {
+          "p50": 0.10114989709109068,
+          "p95": 0.187740137334913
+        },
+        "search": {
+          "p50": 19.187150057405233,
+          "p95": 31.553674966562536
+        },
+        "total": {
+          "p50": 72.91919994167984,
+          "p95": 106.56572985462843
+        },
+        "rerank": {
+          "p50": 33.45549991354346,
+          "p95": 52.574549976270646
+        }
+      }
+    }
+  ]
+}

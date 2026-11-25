@@ -100,6 +100,11 @@ def _load_chunks():
     ]
 
 
+def _load_parents() -> dict[str, str]:
+    df = pd.read_parquet(get_settings().data_dir / "docs.parquet", columns=["pmid", "text"])
+    return dict(zip(df["pmid"], df["text"], strict=True))
+
+
 def cmd_index(args) -> None:
     from .encoders import FastEmbedBM25Encoder, SentenceTransformerEncoder
     from .index import create_collection, make_client, upsert_chunks
@@ -168,6 +173,7 @@ def cmd_eval_retrieval(args) -> None:
     from .encoders import FastEmbedBM25Encoder, SentenceTransformerEncoder
     from .evaluate import evaluate_systems, format_table, write_results
     from .index import make_client
+    from .rerank import CrossEncoderReranker
     from .retrieve import Retriever
 
     s = get_settings()
@@ -186,6 +192,10 @@ def cmd_eval_retrieval(args) -> None:
         SentenceTransformerEncoder(s.dense_model, s.dense_query_prefix, s.device),
         FastEmbedBM25Encoder(s.sparse_model, avg_len=index_meta.get("bm25_avg_len")),
         prefetch_limit=args.prefetch_limit,
+        reranker=CrossEncoderReranker(args.reranker, s.device) if args.reranker else None,
+        rerank_depth=args.rerank_depth,
+        parents=_load_parents() if "rerank_parent" in args.systems else None,
+        rerank_parents=args.rerank_parents,
     )
     systems = args.systems.split(",")
     results = evaluate_systems(retriever, systems, queries, chunk_limit=args.chunk_limit)
@@ -203,6 +213,12 @@ def cmd_eval_retrieval(args) -> None:
         "chunk_limit": args.chunk_limit,
         "prefetch_limit": args.prefetch_limit,
         "device": retriever.dense.device,
+        "reranker": args.reranker or None,
+        "reranker_dtype": retriever.reranker.dtype if retriever.reranker else None,
+        # chunk mode reranks the top rerank_depth chunks; parent mode the top rerank_parents
+        # abstracts found in the base retriever's top max(chunk_limit, prefetch_limit) chunks
+        "rerank_depth": args.rerank_depth if any(x.endswith("+rerank") for x in systems) else None,
+        "rerank_parents": args.rerank_parents if "rerank_parent" in args.systems else None,
     }
     path = write_results(s.results_dir, args.name, summaries, per_query, meta)
     print(format_table(summaries))
@@ -233,6 +249,11 @@ def main(argv: list[str] | None = None) -> None:
     pe.add_argument("--limit-queries", type=int, default=0)
     pe.add_argument("--chunk-limit", type=int, default=100)
     pe.add_argument("--prefetch-limit", type=int, default=100)
+    pe.add_argument("--reranker", default="", help="cross-encoder model for `<system>+rerank`")
+    pe.add_argument("--rerank-depth", type=int, default=50, help="chunks passed to the reranker")
+    pe.add_argument(
+        "--rerank-parents", type=int, default=20, help="abstracts passed to `+rerank_parent`"
+    )
     pe.add_argument("--name", default="m1_retrieval")
     pe.set_defaults(fn=cmd_eval_retrieval)
 
