@@ -13,11 +13,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+          activate-environment: true  # creates and activates .venv; no separate `uv venv`
       - name: Install (CPU PyTorch)
-        # setup-uv with python-version already creates and activates .venv
         run: |
           uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --python .venv/bin/python -e ".[dev]"
+          # fail if the second install swapped in a CUDA build of torch
+          .venv/bin/python -c "import torch; assert torch.version.cuda is None, torch.__version__"
       - name: Lint
         run: |
           .venv/bin/python -m ruff check src tests
