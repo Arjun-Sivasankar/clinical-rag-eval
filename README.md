@@ -37,15 +37,19 @@ end-to-end = query encoding + Qdrant search + reranking, encoders and rerankers 
 (BM25) and 0.843 (hybrid) to 0.892, at 182 ms p95 end to end on a laptop GPU.
 
 What the numbers say (paired bootstrap 95% CIs and exact McNemar tests on the per-query runs,
-in `results/m1_significance_*.json` and `results/m2_significance_*.json`):
+in `results/m1_significance_*.json` and `results/m2_significance_*.json`; "Holm" is the McNemar
+p-value adjusted for the six comparisons of its family, in `results/m*_significance_holm.json`):
 
-- **Dense beats BM25** (Recall@1 +2.9 points, CI [+0.5, +5.3], p = 0.021), and **hybrid DBSF
-  beats dense** (+2.1, CI [+0.3, +3.8], p = 0.029). Hybrid RRF vs dense is not significant
-  (+0.7, p = 0.50), and DBSF vs RRF is borderline (+1.4, p = 0.054).
+- **Hybrid clearly beats BM25:** hybrid DBSF +5.0 points of Recall@1 (CI [+3.0, +7.0], Holm
+  p = 6e-6), hybrid RRF +3.6 (Holm p = 7e-4).
+- **The smaller steps are suggestive, not conclusive.** Dense vs BM25 +2.9 (CI [+0.5, +5.3],
+  p = 0.021, Holm 0.086); hybrid DBSF vs dense +2.1 (CI [+0.3, +3.8], p = 0.029, Holm 0.088);
+  DBSF vs RRF +1.4 (CI [+0.1, +2.8] but p = 0.054, Holm 0.11; mixed evidence). Hybrid RRF vs
+  dense shows no difference (+0.7, p = 0.50).
 - **A domain reranker helps most.** MedCPT on parent abstracts adds +4.9 points of Recall@1
-  over hybrid DBSF (CI [+3.0, +6.8], p = 9e-7) and +3.0 points of nDCG@10. MiniLM-L6 on
-  abstracts adds +2.1 (p = 0.04, borderline given the six reranker comparisons);
-  bge-reranker-base on abstracts does not beat the hybrid base (-1.2, p = 0.33).
+  over hybrid DBSF (CI [+3.0, +6.8], Holm p = 4e-6) and +3.0 points of nDCG@10. MiniLM-L6 on
+  abstracts adds +2.1 (p = 0.04, Holm 0.12: not conclusive); bge-reranker-base on abstracts
+  does not beat the hybrid base (-1.2, p = 0.33).
 - **Rerank whole abstracts, not chunks.** For every reranker, scoring the parent abstract beats
   scoring chunks on their own (Recall@1 +2.0 for MedCPT, p = 0.021; +3.2 for MiniLM, p = 2e-4;
   +17.1 for bge-reranker-base, p = 3e-31; `results/m2_significance_parent_vs_chunks.json`).
@@ -104,6 +108,7 @@ python -m clinical_rag.cli eval-retrieval --reranker ncbi/MedCPT-Cross-Encoder \
   --name m2_rerank_MedCPT-Cross-Encoder     # M2; same for the other two rerankers
 python -m clinical_rag.significance results/runs/m1_retrieval_bm25.jsonl \
   results/runs/m1_retrieval_dense.jsonl     # paired tests: base run, then compared runs
+python -m clinical_rag.significance holm results/m2_significance_vs_hybrid_dbsf.json  # Holm
 python -m clinical_rag.report               # results table -> results/summary.md and README
 ```
 

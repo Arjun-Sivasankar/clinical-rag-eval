@@ -1,0 +1,44 @@
+[
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf+rerank",
+    "recall@1_diff": 0.029,
+    "p_value": 0.003461853491442379,
+    "p_holm": 0.013847413965769516
+  },
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf+rerank_parent",
+    "recall@1_diff": 0.049,
+    "p_value": 8.505991593882261e-07,
+    "p_holm": 4.252995796941131e-06
+  },
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_bge-reranker-base_hybrid_dbsf+rerank",
+    "recall@1_diff": -0.183,
+    "p_value": 1.7350159704414205e-33,
+    "p_holm": 1.0410095822648522e-32
+  },
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_bge-reranker-base_hybrid_dbsf+rerank_parent",
+    "recall@1_diff": -0.012,
+    "p_value": 0.32712296721677864,
+    "p_holm": 0.639454641400531
+  },
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_ms-marco-MiniLM-L6-v2_hybrid_dbsf+rerank",
+    "recall@1_diff": -0.011,
+    "p_value": 0.3197273207002655,
+    "p_holm": 0.639454641400531
+  },
+  {
+    "base": "m2_rerank_MedCPT-Cross-Encoder_hybrid_dbsf",
+    "new": "m2_rerank_ms-marco-MiniLM-L6-v2_hybrid_dbsf+rerank_parent",
+    "recall@1_diff": 0.021,
+    "p_value": 0.03960823767054589,
+    "p_holm": 0.11882471301163766
+  }
+]
