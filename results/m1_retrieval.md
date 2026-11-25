@@ -2,7 +2,7 @@
 
 Corpus: 62249 abstracts, 207664 chunks. Queries: 1000 PubMedQA expert-labelled questions. Dense model: `BAAI/bge-small-en-v1.5`; sparse: `Qdrant/bm25`. Hardware: NVIDIA GeForce RTX 5060 Laptop GPU (8.0 GB), Windows-11-10.0.26200-SP0; Qdrant 1.20.0 at `http://localhost:6333`.
 
-Scored at abstract level (best chunk per PMID); one gold abstract per question, so Recall@k = Hit@k. Latency: one query at a time; *search* is the Qdrant call, *rerank* is the batched cross-encoder pass; *end-to-end* adds query encoding.
+Scored at abstract level (best chunk per PMID) over the top 100 retrieved chunks; one gold abstract per question, so Recall@k = Hit@k. Latency: one query at a time; *search* is the Qdrant call; *end-to-end* adds query encoding.
 
 | System | Recall@1 | Recall@5 | Recall@10 | Recall@20 | MRR@10 | nDCG@10 | Search p50 / p95 (ms) | End-to-end p50 / p95 (ms) |
 |---|---|---|---|---|---|---|---|---|

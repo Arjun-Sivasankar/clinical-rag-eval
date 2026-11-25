@@ -20,8 +20,8 @@
     "sparse_model": "Qdrant/bm25",
     "sparse_embed_s_cpu": 37.2,
     "qdrant_upsert_s": 59.4,
-    "qdrant_server": "1.20.0",
     "n_points": 207664,
-    "note": "Embedding timings from the first `crag index` run (Qdrant 1.15.5); the upsert time is from the re-upload into Qdrant 1.20.0 from cached embeddings. Hardware: RTX 5060 Laptop GPU 8 GB, Windows 11; venv and data on an external exFAT SSD."
+    "note": "Embedding timings are from the first `crag index` run and do not depend on the Qdrant server (that run uploaded to Qdrant 1.15.5). The upsert time is from the re-upload of the same embeddings into Qdrant 1.20.0, the server all results were measured on. Hardware: RTX 5060 Laptop GPU 8 GB, Windows 11; venv and data on an external exFAT SSD.",
+    "qdrant_upsert_s_server": "1.20.0 (re-upload from cached embeddings)"
   }
 }

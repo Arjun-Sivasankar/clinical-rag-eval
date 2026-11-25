@@ -133,8 +133,17 @@ def write_results(
     for system, rows in per_query.items():
         with open(runs / f"{name}_{system}.jsonl", "w", encoding="utf-8", newline="\n") as f:
             f.writelines(json.dumps(r) + "\n" for r in rows)
+    path = out_dir / f"{name}.md"
+    path.write_text(render_markdown(name, summaries, meta), encoding="utf-8", newline="\n")
+    return path
+
+
+def render_markdown(name: str, summaries: list[dict], meta: dict) -> str:
+    """Markdown report for one results file; `python -m clinical_rag.evaluate <json>` re-renders
+    it from the JSON."""
     hw = meta["hardware"]
-    md = (
+    rerank = bool(meta.get("reranker"))
+    return (
         f"# {name}\n\n"
         f"Corpus: {meta.get('n_docs')} abstracts, {meta.get('n_chunks')} chunks. "
         f"Queries: {summaries[0]['n_queries']} PubMedQA expert-labelled questions. "
@@ -142,25 +151,37 @@ def write_results(
         + (
             f"; reranker: `{meta['reranker']}` (`+rerank`: top {meta.get('rerank_depth')} chunks; "
             f"`+rerank_parent`: top {meta.get('rerank_parents')} parent abstracts)"
-            if meta.get("reranker")
+            if rerank
             else ""
         )
         + ". "
         f"Hardware: {hw.get('gpu', 'CPU only')} ({hw.get('gpu_vram_gb', '-')} GB), "
         f"{hw.get('platform')}; "
         f"Qdrant {meta.get('qdrant_server', '')} at `{meta.get('qdrant_location')}`.\n\n"
-        "Scored at abstract level (best chunk per PMID); one gold abstract per question, so "
-        "Recall@k = Hit@k. Latency: one query at a time; *search* is the Qdrant call, "
-        "*rerank* is the batched cross-encoder pass; *end-to-end* adds query encoding.\n\n"
+        "Scored at abstract level (best chunk per PMID) over the top "
+        f"{meta.get('chunk_limit')} retrieved chunks; one gold abstract per question, so "
+        "Recall@k = Hit@k. Latency: one query at a time; *search* is the Qdrant call"
+        + ("; *rerank* is the batched cross-encoder pass" if rerank else "")
+        + "; *end-to-end* adds query encoding.\n\n"
         + format_table(summaries)
         + f"\nGenerated {meta['finished_utc']} by `crag eval-retrieval`.\n"
     )
-    path = out_dir / f"{name}.md"
-    path.write_text(md, encoding="utf-8", newline="\n")
-    return path
+
+
+def _rerender(json_path: Path) -> None:
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    md = render_markdown(json_path.stem, data["summaries"], data["meta"])
+    json_path.with_suffix(".md").write_text(md, encoding="utf-8", newline="\n")
 
 
 def timed(fn, *args, **kwargs):
     t0 = time.perf_counter()
     out = fn(*args, **kwargs)
     return out, time.perf_counter() - t0
+
+
+if __name__ == "__main__":
+    import sys
+
+    for arg in sys.argv[1:]:
+        _rerender(Path(arg))
