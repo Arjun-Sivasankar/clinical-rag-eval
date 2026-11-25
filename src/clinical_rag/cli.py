@@ -225,6 +225,81 @@ def cmd_eval_retrieval(args) -> None:
     log.info("wrote %s", path)
 
 
+def cmd_generate(args) -> None:
+    """Answer the questions with the RAG pipeline. Resumable: rows already in
+    results/<name>.jsonl are kept and skipped."""
+    from datetime import UTC, datetime
+
+    from tqdm import tqdm
+
+    from .encoders import FastEmbedBM25Encoder, SentenceTransformerEncoder
+    from .evaluate import hardware_info
+    from .generate import LLMClient
+    from .index import make_client
+    from .rag import RAGPipeline, summarise
+    from .rerank import CrossEncoderReranker
+    from .retrieve import Retriever
+
+    s = get_settings()
+    queries = pd.read_parquet(s.data_dir / "queries.parquet")
+    if args.limit_queries:
+        queries = queries.head(args.limit_queries)
+    index_meta = json.loads((s.data_dir / "index_meta.json").read_text(encoding="utf-8"))
+    retriever = Retriever(
+        make_client(s.qdrant_location),
+        s.collection,
+        SentenceTransformerEncoder(s.dense_model, s.dense_query_prefix, s.device),
+        FastEmbedBM25Encoder(s.sparse_model, avg_len=index_meta.get("bm25_avg_len")),
+        reranker=CrossEncoderReranker(args.reranker, s.device)
+        if "+rerank" in args.system
+        else None,
+        parents=_load_parents(),
+    )
+    llm = LLMClient(args.base_url, args.model)
+    pipe = RAGPipeline(
+        retriever, llm, retriever.parents, args.system, args.top_k, args.rewrite, args.max_tokens
+    )
+    rows_path = s.results_dir / f"{args.name}.jsonl"
+    done = {}
+    if rows_path.exists():
+        with open(rows_path, encoding="utf-8") as f:
+            done = {r["qid"]: r for r in map(json.loads, f)}
+    with open(rows_path, "a", encoding="utf-8", newline="\n") as f:
+        for row in tqdm(queries.itertuples(index=False), total=len(queries), desc=args.name):
+            if row.qid in done:
+                continue
+            out = {
+                "qid": row.qid,
+                "gold_pmid": row.gold_pmid,
+                "gold_label": row.final_decision,
+                **pipe.run(row.question),
+            }
+            f.write(json.dumps(out) + "\n")
+            f.flush()
+            done[row.qid] = out
+    rows = [done[q] for q in queries["qid"] if q in done]
+    summary = summarise(rows)
+    meta = {
+        "model": args.model,
+        "backend": args.backend,
+        "generator_hardware": args.generator_hardware,
+        "retrieval_hardware": hardware_info(),
+        "system": args.system,
+        "reranker": args.reranker if "+rerank" in args.system else None,
+        "top_k": args.top_k,
+        "rewrite": args.rewrite,
+        "max_tokens": args.max_tokens,
+        "bm25_avg_len": index_meta.get("bm25_avg_len"),
+        "finished_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    (s.results_dir / f"{args.name}.json").write_text(
+        json.dumps({"meta": meta, "summary": summary}, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    log.info("%s: %s", args.name, {k: summary[k] for k in ("n", "accuracy", "macro_f1")})
+
+
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -256,6 +331,22 @@ def main(argv: list[str] | None = None) -> None:
     )
     pe.add_argument("--name", default="m1_retrieval")
     pe.set_defaults(fn=cmd_eval_retrieval)
+
+    pg = sub.add_parser("generate", help="answer questions with the RAG pipeline (resumable)")
+    pg.add_argument("--base-url", required=True, help="OpenAI-compatible API, e.g. .../v1")
+    pg.add_argument("--model", required=True, help="model name as the server knows it")
+    pg.add_argument("--backend", required=True, help="serving stack, e.g. 'vllm 0.x' or 'mlx-lm'")
+    pg.add_argument(
+        "--generator-hardware", required=True, help="where the model runs, e.g. 'Mac mini M4'"
+    )
+    pg.add_argument("--system", default="hybrid_dbsf+rerank_parent")
+    pg.add_argument("--reranker", default="ncbi/MedCPT-Cross-Encoder")
+    pg.add_argument("--top-k", type=int, default=3, help="abstracts given to the generator")
+    pg.add_argument("--rewrite", action="store_true", help="rewrite the query before retrieval")
+    pg.add_argument("--max-tokens", type=int, default=256)
+    pg.add_argument("--limit-queries", type=int, default=0)
+    pg.add_argument("--name", required=True, help="results/<name>.jsonl and .json")
+    pg.set_defaults(fn=cmd_generate)
 
     args = p.parse_args(argv)
     args.fn(args)
