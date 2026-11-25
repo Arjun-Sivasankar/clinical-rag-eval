@@ -1,0 +1,15 @@
+# Services for clinical-rag-eval. M1: Qdrant. Langfuse and the API join in M4.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    ports:
+      - "6333:6333"   # REST
+      - "6334:6334"   # gRPC
+    volumes:
+      # Named volume (inside Docker's disk): Qdrant needs a POSIX filesystem, and the
+      # project drive is exFAT. The index is rebuildable with `make index`.
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
