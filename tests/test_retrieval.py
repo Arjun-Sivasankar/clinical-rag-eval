@@ -1,0 +1,137 @@
+"""End-to-end retrieval over an in-memory Qdrant with deterministic fake encoders (no downloads)."""
+
+import hashlib
+import re
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from clinical_rag.chunking import Document, chunk_corpus
+from clinical_rag.encoders import SparseVec
+from clinical_rag.evaluate import evaluate_system, format_table
+from clinical_rag.index import create_collection, make_client, upsert_chunks
+from clinical_rag.retrieve import SYSTEMS, Retriever
+
+DIM = 64
+
+
+def _tokens(text):
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _tid(tok):
+    return int(hashlib.md5(tok.encode()).hexdigest()[:6], 16)
+
+
+class FakeDense:
+    """Bag-of-words hashed into DIM dims and normalised: similar wording -> similar vector."""
+
+    name, dim, device = "fake-dense", DIM, "cpu"
+
+    def _vec(self, text):
+        v = np.zeros(DIM, dtype=np.float32)
+        for t in _tokens(text):
+            v[_tid(t) % DIM] += 1
+        n = np.linalg.norm(v)
+        return v / n if n else v + 1 / np.sqrt(DIM)
+
+    def encode_docs(self, texts, batch_size=128):
+        return np.stack([self._vec(t) for t in texts])
+
+    def encode_query(self, text):
+        return self._vec(text)
+
+
+class FakeSparse:
+    name = "fake-bm25"
+
+    def _vec(self, text, query=False):
+        counts = {}
+        for t in _tokens(text):
+            counts[_tid(t)] = counts.get(_tid(t), 0) + 1.0
+        if query:
+            counts = {k: 1.0 for k in counts}
+        idx = sorted(counts)
+        return SparseVec(indices=idx, values=[counts[i] for i in idx])
+
+    def encode_docs(self, texts, batch_size=256):
+        return [self._vec(t) for t in texts]
+
+    def encode_query(self, text):
+        return self._vec(text, query=True)
+
+
+DOCS = [
+    Document(
+        "100",
+        [
+            ("BACKGROUND", "Statins lower cholesterol in adults."),
+            ("RESULTS", "LDL fell by a third."),
+        ],
+    ),
+    Document(
+        "200",
+        [
+            ("BACKGROUND", "Aspirin and bleeding risk in the elderly."),
+            ("RESULTS", "Bleeding rose."),
+        ],
+    ),
+    Document(
+        "300",
+        [("BACKGROUND", "Vitamin D supplements and bone fractures."), ("RESULTS", "No effect.")],
+    ),
+    Document(
+        "400",
+        [("BACKGROUND", "Exercise improves depression scores."), ("RESULTS", "Scores improved.")],
+    ),
+]
+QUERIES = pd.DataFrame(
+    {
+        "qid": ["100", "200", "300", "400"],
+        "question": [
+            "Do statins lower cholesterol?",
+            "Does aspirin increase bleeding risk in the elderly?",
+            "Do vitamin D supplements prevent fractures?",
+            "Does exercise improve depression?",
+        ],
+        "gold_pmid": ["100", "200", "300", "400"],
+    }
+)
+
+
+@pytest.fixture(scope="module")
+def retriever():
+    client = make_client(":memory:")
+    chunks = chunk_corpus(DOCS)
+    dense, sparse = FakeDense(), FakeSparse()
+    texts = [c.text for c in chunks]
+    create_collection(client, "test", dim=DIM)
+    upsert_chunks(client, "test", chunks, dense.encode_docs(texts), sparse.encode_docs(texts))
+    return Retriever(client, "test", dense, sparse, prefetch_limit=20)
+
+
+@pytest.mark.parametrize("system", SYSTEMS)
+def test_each_system_finds_gold(retriever, system):
+    res = retriever.search(system, "Does aspirin increase bleeding risk?", limit=10)
+    assert res.ranked_pmids()[0] == "200"
+    assert {"search", "total"} <= set(res.timings_ms)
+
+
+def test_ranked_pmids_dedupes_chunks(retriever):
+    pmids = retriever.search("dense", "bleeding", limit=8).ranked_pmids()
+    assert len(pmids) == len(set(pmids))
+
+
+def test_evaluate_and_table(retriever):
+    summary, rows = evaluate_system(retriever, "hybrid_rrf", QUERIES, chunk_limit=10, warmup=1)
+    assert summary["recall@1"] == 1.0
+    assert summary["ndcg@10"] == 1.0
+    assert len(rows) == 4 and rows[0]["gold_rank"] == 1
+    table = format_table([summary])
+    assert "hybrid_rrf" in table and "1.000" in table
+
+
+def test_unknown_system(retriever):
+    with pytest.raises(ValueError):
+        retriever.search("nope", "x")
