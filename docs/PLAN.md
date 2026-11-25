@@ -4,6 +4,12 @@ Goal: a biomedical QA RAG pipeline on PubMedQA with an ablation table that shows
 stage buys, measured end to end on one laptop GPU. Every number in the README comes from a run
 in this repo, and every table states the hardware it ran on.
 
+## Status (25 Nov 2026)
+
+- M1 done: full corpus (62,249 abstracts, 207,664 chunks), BM25 / dense / hybrid RRF / hybrid
+  DBSF over all 1,000 questions, results in `results/m1_*`.
+- Next: M2 (cross-encoder reranking and per-stage latency).
+
 ## Data
 
 PubMedQA (MIT licence, github.com/pubmedqa/pubmedqa; Hugging Face mirror `qiaojin/PubMedQA`).

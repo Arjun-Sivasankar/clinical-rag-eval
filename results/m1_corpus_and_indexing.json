@@ -1,0 +1,27 @@
+{
+  "corpus": {
+    "n_docs": 62249,
+    "n_chunks": 207664,
+    "n_queries": 1000,
+    "chunk_words_mean": 59.58069766545959,
+    "chunk_words_p95": 132.0,
+    "label_counts": {
+      "yes": 552,
+      "no": 338,
+      "maybe": 110
+    }
+  },
+  "indexing": {
+    "dense_model": "BAAI/bge-small-en-v1.5",
+    "dense_device": "cuda",
+    "dense_embed_s": 137.3,
+    "dense_batch_size": 256,
+    "dense_dtype": "fp16",
+    "sparse_model": "Qdrant/bm25",
+    "sparse_embed_s_cpu": 37.2,
+    "qdrant_upsert_s": 59.4,
+    "n_points": 207664,
+    "note": "Embedding timings are from the first `crag index` run and do not depend on the Qdrant server (that run uploaded to Qdrant 1.15.5). The upsert time is from the re-upload of the same embeddings into Qdrant 1.20.0, the server all results were measured on. Hardware: RTX 5060 Laptop GPU 8 GB, Windows 11; venv and data on an external exFAT SSD.",
+    "qdrant_upsert_s_server": "1.20.0 (re-upload from cached embeddings)"
+  }
+}
