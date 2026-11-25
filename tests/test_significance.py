@@ -34,6 +34,18 @@ def test_compare(tmp_path):
     out = compare(base, new, n_boot=200)
     assert out["recall@1"]["diff"] == pytest.approx(0.75)
     assert out["mcnemar_recall@1"]["gained"] == 3
+    for m in ("recall@1", "mrr@10", "ndcg@10"):
+        lo, hi = out[m]["ci95"]
+        assert lo <= out[m]["diff"] <= hi
+    assert compare(base, new, n_boot=200) == out  # fixed seed -> identical output
+
+
+def test_holm_matches_hand_computed():
+    from clinical_rag.significance import holm
+
+    # sorted p: 0.01*3=0.03, 0.02*2=0.04, 0.04*1 -> max(0.04, 0.04)=0.04; input order restored
+    assert holm([0.04, 0.01, 0.02]) == pytest.approx([0.04, 0.03, 0.04])
+    assert holm([0.5, 0.6]) == pytest.approx([1.0, 1.0])  # capped at 1, monotone
 
 
 def test_report_splice_replaces_only_the_marked_block():

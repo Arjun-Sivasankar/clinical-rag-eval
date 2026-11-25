@@ -62,8 +62,10 @@ def build(results_dir: Path) -> str:
     for label, stem, system in ROWS:
         path = results_dir / f"{stem}.json"
         if not path.exists():
-            continue
-        data = cache.setdefault(stem, json.loads(path.read_text(encoding="utf-8")))
+            raise FileNotFoundError(f"{path} is missing; run the evaluation that writes it")
+        if stem not in cache:
+            cache[stem] = json.loads(path.read_text(encoding="utf-8"))
+        data = cache[stem]
         hw = hw or data["meta"]["hardware"]
         s = next(x for x in data["summaries"] if x["system"] == system)
         lat = s["latency_ms"]

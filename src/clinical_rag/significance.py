@@ -61,16 +61,54 @@ def compare(base_run: Path, new_run: Path, n_boot: int = 10_000, seed: int = 0) 
     return out
 
 
+def holm(p_values: list[float]) -> list[float]:
+    """Holm-Bonferroni adjusted p-values (step-down, monotone), in the input order."""
+    order = sorted(range(len(p_values)), key=lambda i: p_values[i])
+    m, running, adjusted = len(p_values), 0.0, [0.0] * len(p_values)
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (m - rank) * p_values[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def holm_family(paths: list[Path]) -> list[dict]:
+    """Treat every comparison in the given significance files as one family and add Holm-adjusted
+    McNemar p-values."""
+    rows = [r for p in paths for r in json.loads(p.read_text(encoding="utf-8"))]
+    adj = holm([r["mcnemar_recall@1"]["p_value"] for r in rows])
+    return [
+        {
+            "base": r["base"],
+            "new": r["new"],
+            "recall@1_diff": r["recall@1"]["diff"],
+            "p_value": r["mcnemar_recall@1"]["p_value"],
+            "p_holm": a,
+        }
+        for r, a in zip(rows, adj, strict=True)
+    ]
+
+
 def main(argv: list[str] | None = None) -> None:
+    """`significance <base> <new>...` compares runs; `significance holm <files>...` adjusts a family
+    of saved comparisons for multiple testing."""
+    import sys
+
+    argv = sys.argv[1:] if argv is None else argv
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("base", type=Path)
-    ap.add_argument("new", nargs="+", type=Path)
-    ap.add_argument("--out", type=Path)
-    args = ap.parse_args(argv)
-    results = [compare(args.base, n) for n in args.new]
+    if argv and argv[0] == "holm":
+        ap.add_argument("files", nargs="+", type=Path)
+        ap.add_argument("--out", type=Path)
+        args = ap.parse_args(argv[1:])
+        results = holm_family(args.files)
+    else:
+        ap.add_argument("base", type=Path)
+        ap.add_argument("new", nargs="+", type=Path)
+        ap.add_argument("--out", type=Path)
+        args = ap.parse_args(argv)
+        results = [compare(args.base, n) for n in args.new]
     text = json.dumps(results, indent=2)
     if args.out:
-        args.out.write_text(text + "\n", encoding="utf-8")
+        args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
     print(text)
 
 
