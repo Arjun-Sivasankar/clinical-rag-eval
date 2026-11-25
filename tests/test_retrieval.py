@@ -167,6 +167,23 @@ def test_evaluate_systems_interleaves_and_keeps_one_result_per_query(retriever):
     finally:
         del retriever.search
     timed = calls[2:]  # after one warm-up query per system
-    assert timed == ["bm25", "dense", "dense", "bm25", "bm25", "dense", "dense", "bm25"]
+    n = len(QUERIES)
+    expected = [
+        s for i in range(n) for s in (["bm25", "dense"] if i % 2 == 0 else ["dense", "bm25"])
+    ]
+    assert timed == expected
     assert [s["system"] for s, _ in out] == ["bm25", "dense"]
-    assert all(len(rows) == len(QUERIES) for _, rows in out)
+    for (summary, rows), system in zip(out, ["bm25", "dense"], strict=True):
+        # same scores and rows as evaluating that system on its own, in qid order
+        alone_summary, alone_rows = evaluate_system(retriever, system, QUERIES, 10, warmup=0)
+        assert [r["qid"] for r in rows] == QUERIES["qid"].tolist()
+        assert rows == alone_rows
+        for metric in ("recall@1", "recall@5", "mrr@10", "ndcg@10"):
+            assert summary[metric] == alone_summary[metric]
+
+
+def test_evaluate_systems_rejects_duplicates(retriever):
+    from clinical_rag.evaluate import evaluate_systems
+
+    with pytest.raises(ValueError):
+        evaluate_systems(retriever, ["bm25", "bm25"], QUERIES)

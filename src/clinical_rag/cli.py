@@ -22,10 +22,13 @@ def _slug(name: str) -> str:
 
 
 def _texts_sha1(texts: list[str]) -> str:
+    """Hash of an ordered list of texts; each text is length-prefixed, so no two lists collide
+    by concatenation."""
     h = hashlib.sha1()
     for t in texts:
-        h.update(t.encode("utf-8"))
-        h.update(b"\0")
+        b = t.encode("utf-8")
+        h.update(len(b).to_bytes(8, "little"))
+        h.update(b)
     return h.hexdigest()
 
 
@@ -119,9 +122,15 @@ def cmd_index(args) -> None:
 
     # BM25 length normalisation uses the corpus's own mean document length (in BM25 tokens),
     # not fastembed's default of 256. The cache is reused only for the exact same avg_len and
-    # chunk texts.
+    # chunk texts, built by the same fastembed version (its tokenizer and stemmer).
+    from importlib.metadata import version
+
     avg_len = args.bm25_avg_len or FastEmbedBM25Encoder(s.sparse_model).mean_doc_len(texts)
-    sparse_key = {"avg_len": avg_len, "texts_sha1": _texts_sha1(texts)}
+    sparse_key = {
+        "avg_len": avg_len,
+        "texts_sha1": _texts_sha1(texts),
+        "fastembed": version("fastembed"),
+    }
     sparse_path = s.data_dir / f"sparse_{_slug(s.sparse_model)}.pkl"
     cached = pickle.loads(sparse_path.read_bytes()) if sparse_path.exists() else None
     if isinstance(cached, dict) and cached.get("key") == sparse_key and not args.reembed:
@@ -134,6 +143,8 @@ def cmd_index(args) -> None:
         sparse_path.write_bytes(pickle.dumps({"key": sparse_key, "vectors": sparse}))
     timing["bm25_avg_len"] = avg_len
 
+    # The collection is about to be replaced: drop metadata describing the old one first.
+    (s.data_dir / "index_meta.json").unlink(missing_ok=True)
     client = make_client(s.qdrant_location)
     create_collection(client, s.collection, dim=dense.shape[1], recreate=True)
     t0 = time.perf_counter()

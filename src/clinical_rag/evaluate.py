@@ -36,6 +36,8 @@ def evaluate_systems(
     other would bias latency against whichever runs first. Every system is warmed up first, then
     for each query the systems run in an order rotated by one per query.
     """
+    if len(set(systems)) != len(systems):
+        raise ValueError(f"duplicate systems in {systems}")
     # Warm-up queries (model load, CUDA kernels, Qdrant caches) are not timed or scored.
     for q in queries["question"].head(warmup):
         for system in systems:
@@ -175,7 +177,7 @@ def render_markdown(name: str, summaries: list[dict], meta: dict) -> str:
         + (
             f" (BM25 avg_len {meta['bm25_avg_len']:.1f} = corpus mean)"
             if meta.get("bm25_avg_len")
-            else " (BM25 avg_len 256, fastembed default)"
+            else " (BM25 avg_len not recorded)"
         )
         + (
             f"; reranker: `{meta['reranker']}` (`+rerank`: top {meta.get('rerank_depth')} chunks; "
