@@ -77,13 +77,31 @@ class SentenceTransformerEncoder:
 
 
 class FastEmbedBM25Encoder:
-    """BM25 term weights from fastembed (`Qdrant/bm25`); IDF is applied server-side by Qdrant."""
+    """BM25 term weights from fastembed (`Qdrant/bm25`); IDF is applied server-side by Qdrant.
 
-    def __init__(self, model_name: str = "Qdrant/bm25"):
+    `avg_len` is BM25's average document length (in stemmed, stopword-filtered tokens) used for
+    length normalisation. fastembed defaults to 256; pass the corpus mean (see `mean_doc_len`).
+    It only affects document vectors: query terms all get weight 1.
+    """
+
+    def __init__(self, model_name: str = "Qdrant/bm25", avg_len: float | None = None):
         from fastembed import SparseTextEmbedding
 
         self.name = model_name
-        self.model = SparseTextEmbedding(model_name=model_name)
+        kwargs = {} if avg_len is None else {"avg_len": avg_len}
+        self.model = SparseTextEmbedding(model_name=model_name, **kwargs)
+        self.avg_len = self.model.model.avg_len
+
+    def doc_lengths(self, texts: list[str]) -> list[int]:
+        """BM25 length of each text: tokens after fastembed's tokenizer, stopword removal and
+        stemming, i.e. the |d| in its length normalisation. Uses fastembed internals, checked by
+        a test against fastembed's own term weights."""
+        inner = self.model.model
+        return [len(inner._stem(inner.tokenizer.tokenize(t))) for t in texts]
+
+    def mean_doc_len(self, texts: list[str]) -> float:
+        lengths = self.doc_lengths(texts)
+        return sum(lengths) / len(lengths)
 
     @staticmethod
     def _conv(e) -> SparseVec:

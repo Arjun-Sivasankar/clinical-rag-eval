@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import pickle
@@ -18,6 +19,17 @@ log = logging.getLogger("clinical_rag")
 
 def _slug(name: str) -> str:
     return name.replace("/", "__")
+
+
+def _texts_sha1(texts: list[str]) -> str:
+    """Hash of an ordered list of texts; each text is length-prefixed, so no two lists collide
+    by concatenation."""
+    h = hashlib.sha1()
+    for t in texts:
+        b = t.encode("utf-8")
+        h.update(len(b).to_bytes(8, "little"))
+        h.update(b)
+    return h.hexdigest()
 
 
 def cmd_prepare(args) -> None:
@@ -108,22 +120,42 @@ def cmd_index(args) -> None:
         timing["dense_device"] = enc.device
         np.save(dense_path, dense)
 
+    # BM25 length normalisation uses the corpus's own mean document length (in BM25 tokens),
+    # not fastembed's default of 256. The cache is reused only for the exact same avg_len and
+    # chunk texts, built by the same fastembed version (its tokenizer and stemmer).
+    from importlib.metadata import version
+
+    avg_len = args.bm25_avg_len or FastEmbedBM25Encoder(s.sparse_model).mean_doc_len(texts)
+    sparse_key = {
+        "avg_len": avg_len,
+        "texts_sha1": _texts_sha1(texts),
+        "fastembed": version("fastembed"),
+    }
     sparse_path = s.data_dir / f"sparse_{_slug(s.sparse_model)}.pkl"
-    if sparse_path.exists() and not args.reembed:
-        sparse = pickle.loads(sparse_path.read_bytes())
+    cached = pickle.loads(sparse_path.read_bytes()) if sparse_path.exists() else None
+    if isinstance(cached, dict) and cached.get("key") == sparse_key and not args.reembed:
+        sparse = cached["vectors"]
     else:
-        enc_s = FastEmbedBM25Encoder(s.sparse_model)
+        enc_s = FastEmbedBM25Encoder(s.sparse_model, avg_len=avg_len)
         t0 = time.perf_counter()
         sparse = enc_s.encode_docs(texts)
         timing["sparse_embed_s"] = time.perf_counter() - t0
-        sparse_path.write_bytes(pickle.dumps(sparse))
+        sparse_path.write_bytes(pickle.dumps({"key": sparse_key, "vectors": sparse}))
+    timing["bm25_avg_len"] = avg_len
 
+    # The collection is about to be replaced: drop metadata describing the old one first.
+    (s.data_dir / "index_meta.json").unlink(missing_ok=True)
     client = make_client(s.qdrant_location)
     create_collection(client, s.collection, dim=dense.shape[1], recreate=True)
     t0 = time.perf_counter()
     upsert_chunks(client, s.collection, chunks, dense, sparse)
     timing["upsert_s"] = time.perf_counter() - t0
     timing["n_points"] = client.count(s.collection, exact=True).count
+    # Written only after a successful upload, so eval metadata describes what is in Qdrant.
+    (s.data_dir / "index_meta.json").write_text(
+        json.dumps({"bm25_avg_len": avg_len, "sparse_model": s.sparse_model}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     # Merge, so a re-upload from cached embeddings keeps the embedding timings of the first run.
     tpath = s.data_dir / f"index_timing_{_slug(s.dense_model)}.json"
     old = json.loads(tpath.read_text(encoding="utf-8")) if tpath.exists() else {}
@@ -134,7 +166,7 @@ def cmd_index(args) -> None:
 
 def cmd_eval_retrieval(args) -> None:
     from .encoders import FastEmbedBM25Encoder, SentenceTransformerEncoder
-    from .evaluate import evaluate_system, format_table, write_results
+    from .evaluate import evaluate_systems, format_table, write_results
     from .index import make_client
     from .retrieve import Retriever
 
@@ -143,25 +175,29 @@ def cmd_eval_retrieval(args) -> None:
     if args.limit_queries:
         queries = queries.head(args.limit_queries)
     stats = json.loads((s.data_dir / "corpus_stats.json").read_text(encoding="utf-8"))
+    index_meta_path = s.data_dir / "index_meta.json"
+    index_meta = (
+        json.loads(index_meta_path.read_text(encoding="utf-8")) if index_meta_path.exists() else {}
+    )
     client = make_client(s.qdrant_location)
     retriever = Retriever(
         client,
         s.collection,
         SentenceTransformerEncoder(s.dense_model, s.dense_query_prefix, s.device),
-        FastEmbedBM25Encoder(s.sparse_model),
+        FastEmbedBM25Encoder(s.sparse_model, avg_len=index_meta.get("bm25_avg_len")),
         prefetch_limit=args.prefetch_limit,
     )
-    summaries, per_query = [], {}
-    for system in args.systems.split(","):
-        summary, rows = evaluate_system(retriever, system, queries, chunk_limit=args.chunk_limit)
-        summaries.append(summary)
-        per_query[system] = rows
+    systems = args.systems.split(",")
+    results = evaluate_systems(retriever, systems, queries, chunk_limit=args.chunk_limit)
+    summaries = [summary for summary, _ in results]
+    per_query = {system: rows for system, (_, rows) in zip(systems, results, strict=True)}
     # Embedded (local) mode has no server info endpoint.
     server = client.info().version if s.qdrant_location.startswith("http") else "embedded"
     meta = {
         **stats,
         "dense_model": s.dense_model,
         "sparse_model": s.sparse_model,
+        "bm25_avg_len": index_meta.get("bm25_avg_len"),
         "qdrant_location": s.qdrant_location,
         "qdrant_server": server,
         "chunk_limit": args.chunk_limit,
@@ -187,6 +223,9 @@ def main(argv: list[str] | None = None) -> None:
     pi = sub.add_parser("index", help="embed chunks (dense + BM25) and load Qdrant")
     pi.add_argument("--batch-size", type=int, default=256)
     pi.add_argument("--reembed", action="store_true")
+    pi.add_argument(
+        "--bm25-avg-len", type=float, default=0.0, help="BM25 avg doc length (default: corpus mean)"
+    )
     pi.set_defaults(fn=cmd_index)
 
     pe = sub.add_parser("eval-retrieval", help="retrieval ablation with metrics and latency")
