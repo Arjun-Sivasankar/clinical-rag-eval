@@ -108,15 +108,23 @@ def cmd_index(args) -> None:
         timing["dense_device"] = enc.device
         np.save(dense_path, dense)
 
-    sparse_path = s.data_dir / f"sparse_{_slug(s.sparse_model)}.pkl"
+    # BM25 length normalisation uses the corpus's own mean document length (in BM25 tokens),
+    # not fastembed's default of 256; the cache file is keyed by it.
+    avg_len = args.bm25_avg_len or FastEmbedBM25Encoder(s.sparse_model).mean_doc_len(texts)
+    sparse_path = s.data_dir / f"sparse_{_slug(s.sparse_model)}_avglen{avg_len:.2f}.pkl"
     if sparse_path.exists() and not args.reembed:
         sparse = pickle.loads(sparse_path.read_bytes())
     else:
-        enc_s = FastEmbedBM25Encoder(s.sparse_model)
+        enc_s = FastEmbedBM25Encoder(s.sparse_model, avg_len=avg_len)
         t0 = time.perf_counter()
         sparse = enc_s.encode_docs(texts)
         timing["sparse_embed_s"] = time.perf_counter() - t0
         sparse_path.write_bytes(pickle.dumps(sparse))
+    timing["bm25_avg_len"] = avg_len
+    (s.data_dir / "index_meta.json").write_text(
+        json.dumps({"bm25_avg_len": avg_len, "sparse_model": s.sparse_model}, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     client = make_client(s.qdrant_location)
     create_collection(client, s.collection, dim=dense.shape[1], recreate=True)
@@ -143,12 +151,16 @@ def cmd_eval_retrieval(args) -> None:
     if args.limit_queries:
         queries = queries.head(args.limit_queries)
     stats = json.loads((s.data_dir / "corpus_stats.json").read_text(encoding="utf-8"))
+    index_meta_path = s.data_dir / "index_meta.json"
+    index_meta = (
+        json.loads(index_meta_path.read_text(encoding="utf-8")) if index_meta_path.exists() else {}
+    )
     client = make_client(s.qdrant_location)
     retriever = Retriever(
         client,
         s.collection,
         SentenceTransformerEncoder(s.dense_model, s.dense_query_prefix, s.device),
-        FastEmbedBM25Encoder(s.sparse_model),
+        FastEmbedBM25Encoder(s.sparse_model, avg_len=index_meta.get("bm25_avg_len")),
         prefetch_limit=args.prefetch_limit,
     )
     summaries, per_query = [], {}
@@ -162,6 +174,7 @@ def cmd_eval_retrieval(args) -> None:
         **stats,
         "dense_model": s.dense_model,
         "sparse_model": s.sparse_model,
+        "bm25_avg_len": index_meta.get("bm25_avg_len"),
         "qdrant_location": s.qdrant_location,
         "qdrant_server": server,
         "chunk_limit": args.chunk_limit,
@@ -187,6 +200,9 @@ def main(argv: list[str] | None = None) -> None:
     pi = sub.add_parser("index", help="embed chunks (dense + BM25) and load Qdrant")
     pi.add_argument("--batch-size", type=int, default=256)
     pi.add_argument("--reembed", action="store_true")
+    pi.add_argument(
+        "--bm25-avg-len", type=float, default=0.0, help="BM25 avg doc length (default: corpus mean)"
+    )
     pi.set_defaults(fn=cmd_index)
 
     pe = sub.add_parser("eval-retrieval", help="retrieval ablation with metrics and latency")

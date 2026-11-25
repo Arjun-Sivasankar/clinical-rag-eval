@@ -135,3 +135,17 @@ def test_evaluate_and_table(retriever):
 def test_unknown_system(retriever):
     with pytest.raises(ValueError):
         retriever.search("nope", "x")
+
+
+@pytest.mark.slow
+def test_bm25_doc_length_matches_fastembed_weights():
+    """Our |d| must equal the one fastembed uses: with b=1 and avg_len=|d| a single-occurrence
+    term gets weight exactly 1."""
+    from clinical_rag.encoders import FastEmbedBM25Encoder
+
+    text = "Statins lowered the LDL cholesterol of the older adults in this randomised trial."
+    n = FastEmbedBM25Encoder().doc_lengths([text])[0]
+    enc = FastEmbedBM25Encoder(avg_len=float(n))
+    enc.model.model.b = 1.0
+    vec = enc.encode_docs([text])[0]
+    assert n > 0 and all(abs(v - 1.0) < 1e-6 for v in vec.values)

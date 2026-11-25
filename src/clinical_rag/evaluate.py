@@ -149,6 +149,11 @@ def render_markdown(name: str, summaries: list[dict], meta: dict) -> str:
         f"Queries: {summaries[0]['n_queries']} PubMedQA expert-labelled questions. "
         f"Dense model: `{meta.get('dense_model')}`; sparse: `{meta.get('sparse_model')}`"
         + (
+            f" (BM25 avg_len {meta['bm25_avg_len']:.1f} = corpus mean)"
+            if meta.get("bm25_avg_len")
+            else " (BM25 avg_len 256, fastembed default)"
+        )
+        + (
             f"; reranker: `{meta['reranker']}` (`+rerank`: top {meta.get('rerank_depth')} chunks; "
             f"`+rerank_parent`: top {meta.get('rerank_parents')} parent abstracts)"
             if rerank
