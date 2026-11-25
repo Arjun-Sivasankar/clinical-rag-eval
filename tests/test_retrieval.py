@@ -149,3 +149,24 @@ def test_bm25_doc_length_matches_fastembed_weights():
     enc.model.model.b = 1.0
     vec = enc.encode_docs([text])[0]
     assert n > 0 and all(abs(v - 1.0) < 1e-6 for v in vec.values)
+
+
+def test_evaluate_systems_interleaves_and_keeps_one_result_per_query(retriever):
+    from clinical_rag.evaluate import evaluate_systems
+
+    calls = []
+    orig = retriever.search
+
+    def spy(system, query, limit=50, with_text=False):
+        calls.append(system)
+        return orig(system, query, limit=limit, with_text=with_text)
+
+    retriever.search = spy
+    try:
+        out = evaluate_systems(retriever, ["bm25", "dense"], QUERIES, chunk_limit=10, warmup=1)
+    finally:
+        del retriever.search
+    timed = calls[2:]  # after one warm-up query per system
+    assert timed == ["bm25", "dense", "dense", "bm25", "bm25", "dense", "dense", "bm25"]
+    assert [s["system"] for s, _ in out] == ["bm25", "dense"]
+    assert all(len(rows) == len(QUERIES) for _, rows in out)
