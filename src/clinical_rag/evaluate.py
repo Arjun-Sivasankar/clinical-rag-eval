@@ -23,6 +23,53 @@ log = logging.getLogger(__name__)
 KS = (1, 5, 10, 20)
 
 
+def evaluate_systems(
+    retriever: Retriever,
+    systems: list[str],
+    queries: pd.DataFrame,
+    chunk_limit: int = 100,
+    warmup: int = 10,
+) -> list[tuple[dict, list[dict]]]:
+    """Evaluate several systems interleaved query by query, so they share the same machine state.
+
+    On a laptop GPU the clock and power state drift during a run; running systems one after the
+    other would bias latency against whichever runs first. Every system is warmed up first, then
+    for each query the systems run in an order rotated by one per query.
+    """
+    # Warm-up queries (model load, CUDA kernels, Qdrant caches) are not timed or scored.
+    for q in queries["question"].head(warmup):
+        for system in systems:
+            retriever.search(system, q, limit=chunk_limit)
+
+    scores = {s: defaultdict(list) for s in systems}
+    timings = {s: defaultdict(list) for s in systems}
+    per_query: dict[str, list[dict]] = {s: [] for s in systems}
+    rows = list(queries.itertuples(index=False))
+    for i, row in enumerate(tqdm(rows, desc="+".join(systems))):
+        gold = [row.gold_pmid]
+        order = systems[i % len(systems) :] + systems[: i % len(systems)]
+        for system in order:
+            res = retriever.search(system, row.question, limit=chunk_limit)
+            ranked = res.ranked_pmids()
+            sc = scores[system]
+            for k in KS:
+                sc[f"recall@{k}"].append(recall_at_k(ranked, gold, k))
+            sc["mrr@10"].append(mrr_at_k(ranked, gold, 10))
+            sc["ndcg@10"].append(ndcg_at_k(ranked, gold, 10))
+            for stage, ms in res.timings_ms.items():
+                timings[system][stage].append(ms)
+            rank = ranked.index(row.gold_pmid) + 1 if row.gold_pmid in ranked else None
+            per_query[system].append({"qid": row.qid, "gold_rank": rank, "top10": ranked[:10]})
+
+    out = []
+    for system in systems:
+        summary = {"system": system, "n_queries": len(rows)}
+        summary.update({m: float(np.mean(v)) for m, v in scores[system].items()})
+        summary["latency_ms"] = {st: percentiles(v) for st, v in timings[system].items()}
+        out.append((summary, per_query[system]))
+    return out
+
+
 def evaluate_system(
     retriever: Retriever,
     system: str,
@@ -30,30 +77,7 @@ def evaluate_system(
     chunk_limit: int = 100,
     warmup: int = 10,
 ) -> tuple[dict, list[dict]]:
-    # Warm-up queries (model load, CUDA kernels, Qdrant caches) are not timed or scored.
-    for q in queries["question"].head(warmup):
-        retriever.search(system, q, limit=chunk_limit)
-
-    scores: dict[str, list[float]] = defaultdict(list)
-    timings: dict[str, list[float]] = defaultdict(list)
-    per_query = []
-    for row in tqdm(queries.itertuples(index=False), total=len(queries), desc=system):
-        res = retriever.search(system, row.question, limit=chunk_limit)
-        ranked = res.ranked_pmids()
-        gold = [row.gold_pmid]
-        for k in KS:
-            scores[f"recall@{k}"].append(recall_at_k(ranked, gold, k))
-        scores["mrr@10"].append(mrr_at_k(ranked, gold, 10))
-        scores["ndcg@10"].append(ndcg_at_k(ranked, gold, 10))
-        for stage, ms in res.timings_ms.items():
-            timings[stage].append(ms)
-        rank = ranked.index(row.gold_pmid) + 1 if row.gold_pmid in ranked else None
-        per_query.append({"qid": row.qid, "gold_rank": rank, "top10": ranked[:10]})
-
-    summary = {"system": system, "n_queries": len(queries)}
-    summary.update({m: float(np.mean(v)) for m, v in scores.items()})
-    summary["latency_ms"] = {stage: percentiles(v) for stage, v in timings.items()}
-    return summary, per_query
+    return evaluate_systems(retriever, [system], queries, chunk_limit, warmup)[0]
 
 
 def hardware_info() -> dict:
