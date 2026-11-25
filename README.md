@@ -11,15 +11,15 @@ validated LLM judge, Langfuse tracing and the API come next; see [docs/PLAN.md](
 
 | Pipeline | Recall@1 | Recall@5 | Recall@10 | Recall@20 | MRR@10 | nDCG@10 | Search p50 / p95 (ms) | End-to-end p50 / p95 (ms) |
 |---|---|---|---|---|---|---|---|---|
-| BM25 (Qdrant sparse, IDF) | 0.793 | 0.908 | 0.934 | 0.956 | 0.843 | 0.865 | 20.3 / 35.4 | 20.4 / 35.6 |
-| Dense (bge-small-en-v1.5) | 0.822 | 0.950 | 0.966 | 0.973 | 0.877 | 0.899 | 12.9 / 32.7 | 38.1 / 60.2 |
-| Hybrid, RRF fusion | 0.827 | 0.958 | 0.977 | 0.979 | 0.884 | 0.907 | 17.8 / 31.7 | 31.3 / 61.6 |
-| Hybrid, DBSF fusion | 0.843 | 0.956 | 0.971 | 0.981 | 0.893 | 0.912 | 18.2 / 27.7 | 26.8 / 37.3 |
+| BM25 (Qdrant sparse, IDF) | 0.793 | 0.908 | 0.934 | 0.956 | 0.843 | 0.865 | 17.2 / 29.5 | 17.3 / 29.6 |
+| Dense (bge-small-en-v1.5) | 0.822 | 0.952 | 0.968 | 0.975 | 0.878 | 0.900 | 17.9 / 30.0 | 30.0 / 50.8 |
+| Hybrid, RRF fusion | 0.829 | 0.959 | 0.977 | 0.980 | 0.885 | 0.908 | 19.3 / 33.0 | 31.5 / 55.2 |
+| Hybrid, DBSF fusion | 0.843 | 0.958 | 0.972 | 0.981 | 0.893 | 0.913 | 18.5 / 31.4 | 30.6 / 54.2 |
 
 Source: `results/m1_retrieval.md` / `.json` (per-query rankings in `results/runs/`).
 Hardware: NVIDIA GeForce RTX 5060 Laptop GPU (8 GB), Windows 11, Qdrant 1.20.0 in Docker on the
-same laptop. Latency is one query at a time (batch size 1); *search* is the Qdrant call,
-end-to-end adds query encoding (fp16 on the GPU).
+same laptop. Latency is one query at a time (batch size 1), systems interleaved per query;
+*search* is the Qdrant call, end-to-end adds query encoding (fp16 on the GPU).
 
 Hybrid search with DBSF fusion is the best of the four on Recall@1, MRR and nDCG; dense alone
 beats BM25 by 2.9 points of Recall@1. BM25 normalises document length by the corpus's own mean
@@ -34,8 +34,9 @@ Significance tests and reranking come in M2.
   reported.
 - Re-running the same system changes 1 of 1,000 rankings (approximate HNSW search, fp16), and
   rebuilding the index can move dense results by a few queries.
-- Latency is measured on a shared laptop: the same system's p50 varied by up to 17 ms between
-  runs, so compare latencies within one results file, not across files.
+- Latency is measured on a shared laptop. Systems in one results file run interleaved query by
+  query (#19), so they see the same machine state; latencies from different files or runs can
+  differ by 10-20 ms and should not be compared.
 
 ## How it works
 
@@ -49,7 +50,7 @@ Significance tests and reranking come in M2.
   named sparse vector (fastembed `Qdrant/bm25` with Qdrant's IDF modifier) per chunk. Hybrid search
   is one `query_points` call with two prefetches (top 100 each) fused by RRF or DBSF.
 - **Indexing cost** (`results/m1_corpus_and_indexing.json`): dense embedding of 207,664 chunks
-  137 s on the RTX 5060, BM25 encoding 34 s on CPU, upload to Qdrant 62 s.
+  137 s on the RTX 5060, BM25 encoding 22 s on CPU, upload to Qdrant 93 s.
 
 ## Reproduce
 
