@@ -187,3 +187,54 @@ def test_evaluate_systems_rejects_duplicates(retriever):
 
     with pytest.raises(ValueError):
         evaluate_systems(retriever, ["bm25", "bm25"], QUERIES)
+
+
+class FakeReranker:
+    """Scores by word overlap with the query, so it can reorder a noisy base ranking."""
+
+    name = "fake-rerank"
+
+    def score(self, query, passages):
+        q = set(_tokens(query))
+        return [len(q & set(_tokens(p))) for p in passages]
+
+
+def test_rerank_stage(retriever):
+    retriever.reranker, retriever.rerank_depth = FakeReranker(), 8
+    try:
+        res = retriever.search("hybrid_rrf+rerank", "vitamin d supplements fractures", limit=5)
+        assert res.ranked_pmids()[0] == "300"
+        assert "rerank" in res.timings_ms and len(res.hits) <= 5
+        assert res.hits == sorted(res.hits, key=lambda h: h.score, reverse=True)
+        summary, _ = evaluate_system(retriever, "dense+rerank", QUERIES, chunk_limit=10, warmup=0)
+        assert "rerank" in summary["latency_ms"]
+        assert "Rerank p50" in format_table([summary])
+    finally:
+        retriever.reranker = None
+
+
+def test_rerank_without_model_fails(retriever):
+    with pytest.raises(ValueError):
+        retriever.search("dense+rerank", "x")
+
+
+def test_rerank_parent_scores_whole_abstracts(retriever):
+    parents = {d.pmid: d.text for d in DOCS}
+    retriever.reranker, retriever.parents, retriever.rerank_parents = FakeReranker(), parents, 3
+    try:
+        res = retriever.search("hybrid_rrf+rerank_parent", "aspirin bleeding elderly", limit=10)
+        pmids = [h.pmid for h in res.hits]
+        assert pmids[0] == "200"
+        assert len(pmids) == len(set(pmids))  # one hit per abstract
+        assert set(pmids) == {"100", "200", "300", "400"}  # tail beyond the cut is kept
+    finally:
+        retriever.reranker, retriever.parents = None, None
+
+
+def test_rerank_parent_needs_parents(retriever):
+    retriever.reranker = FakeReranker()
+    try:
+        with pytest.raises(ValueError):
+            retriever.search("dense+rerank_parent", "x")
+    finally:
+        retriever.reranker = None
