@@ -32,8 +32,11 @@ REWRITE_SYSTEM = (
 )
 
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
-_ANSWER = re.compile(r"answer\s*[:\-]\s*\**\s*(yes|no|maybe)\b", re.I)
-_FIRST_WORD = re.compile(r"^\W*(yes|no|maybe)\b", re.I)
+# "Answer: yes", "**Answer**: no", "Answer - maybe", "The answer is no"; not the echoed template
+# "Answer: yes | no | maybe".
+_ANSWER = re.compile(r"answer\**\s*(?:[:\-]|is\b)\s*\**\s*(yes|no|maybe)\b(?!\s*[|/])", re.I)
+_FIRST_WORD = re.compile(r"^\W*(yes|no|maybe)\b(?!\s*[|/])", re.I)
+RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -52,6 +55,13 @@ class LLMClient:
     model: str
     api_key: str = "EMPTY"
     timeout: float = 120.0
+    retries: int = 3
+    backoff_s: float = 2.0
+    # Qwen3: turn thinking off in the chat template (vLLM honours this; servers that don't know
+    # the field ignore it, and the prompt's `/no_think` plus `strip_think` cover the rest).
+    extra_body: dict = field(
+        default_factory=lambda: {"chat_template_kwargs": {"enable_thinking": False}}
+    )
     transport: httpx.BaseTransport | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -62,24 +72,44 @@ class LLMClient:
             headers={"Authorization": f"Bearer {self.api_key}"},
         )
 
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> LLMClient:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def chat(
         self, messages: list[dict], max_tokens: int = 256, temperature: float = 0.0
     ) -> Completion:
-        t0 = time.perf_counter()
-        r = self._http.post(
-            "/chat/completions",
-            json={
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-        )
-        r.raise_for_status()
+        """One completion. Retries timeouts and 429/5xx with exponential backoff; other HTTP
+        errors raise with the server's message. Latency covers the successful attempt only."""
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            **self.extra_body,
+        }
+        for attempt in range(self.retries + 1):
+            t0 = time.perf_counter()
+            try:
+                r = self._http.post("/chat/completions", json=body)
+            except httpx.TimeoutException:
+                if attempt == self.retries:
+                    raise
+            else:
+                if r.status_code < 400:
+                    break
+                if r.status_code not in RETRY_STATUS or attempt == self.retries:
+                    raise RuntimeError(f"LLM server returned {r.status_code}: {r.text[:500]}")
+            time.sleep(self.backoff_s * 2**attempt)
         data = r.json()
         usage = data.get("usage") or {}
         return Completion(
-            text=data["choices"][0]["message"]["content"] or "",
+            text=data["choices"][0]["message"].get("content") or "",
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),

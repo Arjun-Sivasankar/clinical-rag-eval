@@ -17,7 +17,7 @@ from clinical_rag.generate import (
     strip_think,
 )
 from clinical_rag.index import create_collection, make_client, upsert_chunks
-from clinical_rag.rag import RAGPipeline, macro_f1, summarise
+from clinical_rag.rag import RAGPipeline, macro_f1, open_run, summarise
 from clinical_rag.retrieve import Retriever
 
 
@@ -29,6 +29,10 @@ from clinical_rag.retrieve import Retriever
         ("<think>maybe yes, maybe no</think>\nAnswer: maybe\nExplanation: unclear", "maybe"),
         ("Yes. The trial [100] shows it.", "yes"),
         ("The evidence is mixed.", None),
+        ("The answer is no, because [100] found no effect.", "no"),
+        ("**Answer**: yes\n**Explanation**: [100]", "yes"),
+        ("Answer: yes | no | maybe\nExplanation: unsure", None),  # echoed template
+        ("Answer: Yes, but only in adults.", "yes"),
         ("<think>unterminated reasoning, answer: yes", None),
     ],
 )
@@ -86,10 +90,52 @@ def _fake_llm(replies):
 
 
 def test_llm_client_posts_openai_format():
-    llm, seen = _fake_llm(["hello"])
-    c = llm.chat([{"role": "user", "content": "hi"}], max_tokens=7)
-    assert c.text == "hello" and c.completion_tokens == 5 and c.latency_ms >= 0
-    assert seen[0]["model"] == "m" and seen[0]["max_tokens"] == 7 and seen[0]["temperature"] == 0
+    reqs = []
+
+    def handler(request):
+        reqs.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hello"}}]})
+
+    with LLMClient(
+        "http://fake/v1/", "m", api_key="k", transport=httpx.MockTransport(handler)
+    ) as llm:
+        c = llm.chat([{"role": "user", "content": "hi"}], max_tokens=7)
+    body = json.loads(reqs[0].content)
+    assert c.text == "hello" and c.completion_tokens is None and c.latency_ms >= 0
+    assert str(reqs[0].url) == "http://fake/v1/chat/completions"
+    assert reqs[0].headers["authorization"] == "Bearer k"
+    assert body["model"] == "m" and body["max_tokens"] == 7 and body["temperature"] == 0
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_llm_client_retries_5xx_then_raises_with_message():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503, text="loading")
+        if len(calls) == 2:
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        return httpx.Response(400, text="bad prompt")
+
+    llm = LLMClient("http://fake/v1", "m", backoff_s=0, transport=httpx.MockTransport(handler))
+    assert llm.chat([]).text == "ok" and len(calls) == 2  # 503 retried
+    with pytest.raises(RuntimeError, match="400: bad prompt"):  # 4xx not retried
+        llm.chat([])
+    assert len(calls) == 3
+
+
+def test_llm_client_gives_up_after_retries():
+    llm = LLMClient(
+        "http://fake/v1",
+        "m",
+        retries=2,
+        backoff_s=0,
+        transport=httpx.MockTransport(lambda r: httpx.Response(500, text="down")),
+    )
+    with pytest.raises(RuntimeError, match="500: down"):
+        llm.chat([])
 
 
 @pytest.fixture(scope="module")
@@ -128,3 +174,52 @@ def test_summarise(retriever):
     assert s["pred_counts"] == {"yes": 2, "no": 0, "maybe": 0}
     assert s["recall@1"] == 1.0 and s["gold_in_context"] == 1.0
     assert "generate" in s["latency_ms"]
+
+
+def test_pipeline_context_comes_from_reranked_ranking(retriever):
+    from test_retrieval import FakeReranker
+
+    llm, seen = _fake_llm(["Answer: no\nExplanation: [300]"])
+    parents = {d.pmid: d.text for d in DOCS}
+    retriever.reranker, retriever.parents, retriever.rerank_parents = FakeReranker(), parents, 4
+    try:
+        pipe = RAGPipeline(retriever, llm, parents, system="dense+rerank_parent", top_k=1)
+        out = pipe.run("vitamin d supplements bone fractures")
+        base = retriever.search("dense", "vitamin d supplements bone fractures").ranked_pmids()
+    finally:
+        retriever.reranker, retriever.parents = None, None
+    assert out["contexts"] == ["300"]  # the reranker's top abstract
+    assert out["ranked"][0] == "300" and "retrieve_rerank" in out["timings_ms"]
+    assert set(out["ranked"]) == set(base)  # same candidates, reranked order
+    assert parents["300"] in seen[0]["messages"][-1]["content"]
+
+
+def test_open_run_resumes_and_refuses_other_settings(tmp_path):
+    rows = tmp_path / "run.jsonl"
+    cfg = {"model": "m", "top_k": 3}
+    assert open_run(rows, cfg) == {}
+    rows.write_text('{"qid": "1", "label": "yes"}\n{"qid": "2", "lab', encoding="utf-8")
+    done = open_run(rows, cfg)  # partial last line dropped
+    assert list(done) == ["1"]
+    assert rows.read_text(encoding="utf-8") == '{"qid": "1", "label": "yes"}\n'
+    with pytest.raises(SystemExit, match="top_k"):
+        open_run(rows, {"model": "m", "top_k": 5})
+
+
+def test_summarise_handles_rows_with_different_stages():
+    base = {
+        "gold_pmid": "1",
+        "gold_label": "yes",
+        "label": "yes",
+        "raw": "Answer: yes",
+        "contexts": ["1"],
+        "cited": [],
+        "ranked": ["1"],
+    }
+    rows = [
+        {**base, "timings_ms": {"generate": 10.0}},
+        {**base, "raw": "", "label": None, "timings_ms": {"generate": 20.0, "rewrite": 5.0}},
+    ]
+    s = summarise(rows)
+    assert s["empty_replies"] == 1 and s["unparsed"] == 1
+    assert s["latency_ms"]["rewrite"]["p50"] == 5.0

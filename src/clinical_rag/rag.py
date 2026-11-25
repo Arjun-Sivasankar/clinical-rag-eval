@@ -6,9 +6,11 @@ dataset's standard metrics); retrieval for the rewritten query is scored like M1
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -85,6 +87,7 @@ def summarise(rows: list[dict]) -> dict:
         "accuracy": float(np.mean([g == p for g, p in zip(gold, pred, strict=True)])),
         "macro_f1": macro_f1(gold, pred),
         "unparsed": sum(p is None for p in pred),
+        "empty_replies": sum(not r["raw"].strip() for r in rows),
         "pred_counts": {lab: pred.count(lab) for lab in LABELS},
         "gold_in_context": float(np.mean([r["gold_pmid"] in r["contexts"] for r in rows])),
         "cites_gold": float(np.mean([r["gold_pmid"] in r["cited"] for r in rows])),
@@ -96,5 +99,46 @@ def summarise(rows: list[dict]) -> dict:
     out["mrr@10"] = float(np.mean([mrr_at_k(r["ranked"], [r["gold_pmid"]], 10) for r in rows]))
     out["ndcg@10"] = float(np.mean([ndcg_at_k(r["ranked"], [r["gold_pmid"]], 10) for r in rows]))
     stages = sorted({s for r in rows for s in r["timings_ms"]})
-    out["latency_ms"] = {s: percentiles([r["timings_ms"][s] for r in rows]) for s in stages}
+    out["latency_ms"] = {
+        s: percentiles([r["timings_ms"][s] for r in rows if s in r["timings_ms"]]) for s in stages
+    }
     return out
+
+
+def open_run(rows_path: Path, config: dict) -> dict[str, dict]:
+    """Prepare a resumable run; return the rows already done, keyed by qid.
+
+    The run's config is stored next to the rows (`<name>.config.json`); resuming with a different
+    config is refused, so rows from different settings never mix. A partial last line (a run cut
+    off mid-write) is dropped and the file rewritten, so the next append starts on a clean line.
+    """
+    cfg_path = rows_path.with_suffix(".config.json")
+    if cfg_path.exists():
+        old = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if old != config:
+            diff = {
+                k: (old.get(k), config.get(k))
+                for k in config.keys() | old.keys()
+                if old.get(k) != config.get(k)
+            }
+            raise SystemExit(
+                f"{rows_path.name} was made with other settings {diff}; use a new --name"
+            )
+    else:
+        cfg_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8", newline="\n")
+    done: dict[str, dict] = {}
+    if not rows_path.exists():
+        return done
+    lines = rows_path.read_text(encoding="utf-8").splitlines()
+    good = []
+    for i, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            if i == len(lines) - 1:
+                break  # cut off mid-write: drop it
+            raise
+        good.append(line)
+        done[row["qid"]] = row
+    rows_path.write_text("".join(g + "\n" for g in good), encoding="utf-8", newline="\n")
+    return done

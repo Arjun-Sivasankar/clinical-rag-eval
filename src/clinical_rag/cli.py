@@ -236,7 +236,7 @@ def cmd_generate(args) -> None:
     from .evaluate import hardware_info
     from .generate import LLMClient
     from .index import make_client
-    from .rag import RAGPipeline, summarise
+    from .rag import RAGPipeline, open_run, summarise
     from .rerank import CrossEncoderReranker
     from .retrieve import Retriever
 
@@ -260,10 +260,18 @@ def cmd_generate(args) -> None:
         retriever, llm, retriever.parents, args.system, args.top_k, args.rewrite, args.max_tokens
     )
     rows_path = s.results_dir / f"{args.name}.jsonl"
-    done = {}
-    if rows_path.exists():
-        with open(rows_path, encoding="utf-8") as f:
-            done = {r["qid"]: r for r in map(json.loads, f)}
+    run_config = {
+        "model": args.model,
+        "backend": args.backend,
+        "system": args.system,
+        "reranker": args.reranker if "+rerank" in args.system else None,
+        "top_k": args.top_k,
+        "rewrite": args.rewrite,
+        "max_tokens": args.max_tokens,
+        "dense_model": s.dense_model,
+        "bm25_avg_len": index_meta.get("bm25_avg_len"),
+    }
+    done = open_run(rows_path, run_config)
     with open(rows_path, "a", encoding="utf-8", newline="\n") as f:
         for row in tqdm(queries.itertuples(index=False), total=len(queries), desc=args.name):
             if row.qid in done:
@@ -277,6 +285,7 @@ def cmd_generate(args) -> None:
             f.write(json.dumps(out) + "\n")
             f.flush()
             done[row.qid] = out
+    llm.close()
     rows = [done[q] for q in queries["qid"] if q in done]
     summary = summarise(rows)
     meta = {
