@@ -2,8 +2,12 @@
 
 PubMedQA contexts already come split into labelled sections (BACKGROUND, METHODS, RESULTS, ...).
 Each section becomes one child chunk; a section longer than `max_words` is split into windows of
-whole sentences. Retrieval runs over children and is scored per parent (PMID); generation gets
-the full parent abstract.
+whole sentences. Known limits of the regex sentence splitter: it also splits after abbreviations
+followed by a capital or digit ("e.g. A", "Fig. 2"), and windows are re-joined with single
+spaces. Both only move window boundaries inside long sections; no text is dropped.
+
+Retrieval runs over children and is scored per parent (PMID); generation gets the full parent
+abstract.
 """
 
 from __future__ import annotations

@@ -26,9 +26,15 @@ def cmd_prepare(args) -> None:
         # Keep every gold abstract, then fill with distractors up to max_docs.
         gold = set(queries["gold_pmid"])
         keep = [d for d in docs if d.pmid in gold]
+        if args.max_docs < len(keep):
+            log.warning(
+                "--max-docs %d < %d gold abstracts; keeping all gold", args.max_docs, len(keep)
+            )
         keep += [d for d in docs if d.pmid not in gold][: max(0, args.max_docs - len(keep))]
         docs = keep
     chunks = chunk_corpus(docs, max_words=s.max_chunk_words)
+    if not chunks:
+        raise SystemExit("no chunks produced; check the downloaded splits")
     pd.DataFrame(
         {
             "pmid": [d.pmid for d in docs],

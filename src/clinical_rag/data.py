@@ -51,6 +51,10 @@ def read_split(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+def _s(x) -> str:
+    return "" if x is None else str(x)
+
+
 def to_documents(df: pd.DataFrame, split: str) -> list[Document]:
     docs = []
     for row in df.itertuples(index=False):
@@ -62,7 +66,7 @@ def to_documents(df: pd.DataFrame, split: str) -> list[Document]:
         docs.append(
             Document(
                 pmid=str(row.pubid),
-                sections=[(str(lab), str(txt)) for lab, txt in zip(labels, texts, strict=True)],
+                sections=[(_s(lab), _s(txt)) for lab, txt in zip(labels, texts, strict=True)],
                 split=split,
             )
         )
@@ -82,11 +86,17 @@ def to_queries(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_corpus(split_paths: dict[str, Path]) -> tuple[list[Document], pd.DataFrame]:
-    """Return (documents de-duplicated by PMID, queries from pqa_labeled)."""
+    """Return (documents de-duplicated by PMID, queries from pqa_labeled).
+
+    `pqa_labeled` is read first whatever the dict order, so a PMID present in both splits keeps
+    its labelled copy (the one the gold answers refer to).
+    """
     seen: set[str] = set()
     docs: list[Document] = []
     queries = None
-    for split, path in split_paths.items():
+    order = sorted(split_paths, key=lambda sp: sp != "pqa_labeled")
+    for split in order:
+        path = split_paths[split]
         df = read_split(path)
         log.info("%s: %d rows", split, len(df))
         if split == "pqa_labeled":

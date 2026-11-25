@@ -58,3 +58,17 @@ def test_build_corpus_dedupes_by_pmid_and_keeps_labelled_version(tmp_path):
     assert [d.pmid for d in docs] == ["111", "222", "333"]
     assert docs[1].split == "pqa_labeled"
     assert len(queries) == 2
+
+
+def test_none_entries_become_empty_strings():
+    df = LABELED.head(1).copy()
+    df.at[0, "context"] = _ctx(["text.", None], ["A", None])
+    assert to_documents(df, "x")[0].sections == [("A", "text."), ("", "")]
+
+
+def test_labelled_copy_wins_whatever_the_dict_order(tmp_path):
+    lab, unl = tmp_path / "lab.parquet", tmp_path / "unl.parquet"
+    LABELED.to_parquet(lab)
+    UNLABELED.to_parquet(unl)
+    docs, _ = build_corpus({"pqa_unlabeled": unl, "pqa_labeled": lab})
+    assert {d.pmid: d.split for d in docs}["222"] == "pqa_labeled"
