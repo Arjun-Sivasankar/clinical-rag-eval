@@ -214,7 +214,10 @@ def cmd_eval_retrieval(args) -> None:
         "prefetch_limit": args.prefetch_limit,
         "device": retriever.dense.device,
         "reranker": args.reranker or None,
-        "rerank_depth": args.rerank_depth if args.reranker else None,
+        "reranker_dtype": retriever.reranker.dtype if retriever.reranker else None,
+        # chunk mode reranks the top rerank_depth chunks; parent mode the top rerank_parents
+        # abstracts found in the base retriever's top max(chunk_limit, prefetch_limit) chunks
+        "rerank_depth": args.rerank_depth if any(x.endswith("+rerank") for x in systems) else None,
         "rerank_parents": args.rerank_parents if "rerank_parent" in args.systems else None,
     }
     path = write_results(s.results_dir, args.name, summaries, per_query, meta)

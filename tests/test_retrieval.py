@@ -238,3 +238,16 @@ def test_rerank_parent_needs_parents(retriever):
             retriever.search("dense+rerank_parent", "x")
     finally:
         retriever.reranker = None
+
+
+def test_rerank_keeps_tail_in_base_order(retriever):
+    retriever.reranker, retriever.rerank_depth = FakeReranker(), 2
+    try:
+        q = "aspirin bleeding risk elderly"
+        base = [h.chunk_id for h in retriever.search("dense", q, limit=8).hits]
+        res = retriever.search("dense+rerank", q, limit=8)
+        ids = [h.chunk_id for h in res.hits]
+        assert sorted(ids[:2]) == sorted(base[:2])  # head = reranked top 2
+        assert ids[2:] == base[2:]  # tail untouched, in base order
+    finally:
+        retriever.reranker, retriever.rerank_depth = None, 50

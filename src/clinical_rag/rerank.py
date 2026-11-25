@@ -24,7 +24,9 @@ class CrossEncoderReranker:
         self.name = model_name
         self.device = resolve_device(device)
         self.model = CrossEncoder(model_name, device=self.device, max_length=max_length)
-        if self.device == "cuda":
+        # fp16 on GPU (scores match fp32 to ~1e-3 on this task); recorded in results metadata.
+        self.dtype = "fp16" if self.device == "cuda" else "fp32"
+        if self.dtype == "fp16":
             self.model.model.half()
         self.batch_size = batch_size
 

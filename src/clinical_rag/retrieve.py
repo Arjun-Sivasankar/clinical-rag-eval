@@ -102,9 +102,9 @@ class Retriever:
         if stage == "rerank_parent" and self.parents is None:
             raise ValueError("rerank_parent needs the parent texts (Retriever(parents=...))")
         t_all = time.perf_counter()
-        res = self._search_base(
-            base, query, limit=max(limit, self.rerank_depth), with_text=stage == "rerank"
-        )
+        # Parent mode needs enough chunks to find rerank_parents distinct abstracts.
+        fetch = self.rerank_depth if stage == "rerank" else self.prefetch_limit
+        res = self._search_base(base, query, limit=max(limit, fetch), with_text=stage == "rerank")
         if stage == "rerank":
             head, tail = res.hits[: self.rerank_depth], res.hits[self.rerank_depth :]
             passages = [h.text for h in head]
