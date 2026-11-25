@@ -309,6 +309,54 @@ def cmd_generate(args) -> None:
     log.info("%s: %s", args.name, {k: summary[k] for k in ("n", "accuracy", "macro_f1")})
 
 
+def cmd_judge_validate(args) -> None:
+    """Validate the LLM judge: label PubMedQA's reference conclusions and compare with the
+    experts' yes/no/maybe. Resumable like `generate`."""
+    from datetime import UTC, datetime
+
+    from tqdm import tqdm
+
+    from .generate import LLMClient
+    from .judge import agreement, judge
+    from .metrics import percentiles
+    from .rag import open_run
+
+    s = get_settings()
+    queries = pd.read_parquet(s.data_dir / "queries.parquet")
+    if args.limit_queries:
+        queries = queries.head(args.limit_queries)
+    rows_path = s.results_dir / f"{args.name}.jsonl"
+    done = open_run(rows_path, {"model": args.model, "backend": args.backend, "task": "validate"})
+    with (
+        LLMClient(args.base_url, args.model) as llm,
+        open(rows_path, "a", encoding="utf-8", newline="\n") as f,
+    ):
+        for row in tqdm(queries.itertuples(index=False), total=len(queries), desc=args.name):
+            if row.qid in done:
+                continue
+            label, raw, ms = judge(llm, row.question, row.long_answer)
+            out = {"qid": row.qid, "gold": row.final_decision, "judge": label, "raw": raw, "ms": ms}
+            f.write(json.dumps(out) + "\n")
+            f.flush()
+            done[row.qid] = out
+    rows = [done[q] for q in queries["qid"] if q in done]
+    result = agreement([r["gold"] for r in rows], [r["judge"] for r in rows])
+    result["latency_ms"] = percentiles([r["ms"] for r in rows])
+    meta = {
+        "model": args.model,
+        "backend": args.backend,
+        "judge_hardware": args.judge_hardware,
+        "input": "question + PubMedQA long_answer (reference conclusion)",
+        "finished_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    (s.results_dir / f"{args.name}.json").write_text(
+        json.dumps({"meta": meta, "agreement": result}, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    log.info("%s: accuracy %.3f kappa %.3f", args.name, result["accuracy"], result["cohen_kappa"])
+
+
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -356,6 +404,15 @@ def main(argv: list[str] | None = None) -> None:
     pg.add_argument("--limit-queries", type=int, default=0)
     pg.add_argument("--name", required=True, help="results/<name>.jsonl and .json")
     pg.set_defaults(fn=cmd_generate)
+
+    pj = sub.add_parser("judge-validate", help="judge agreement with expert labels (resumable)")
+    pj.add_argument("--base-url", required=True)
+    pj.add_argument("--model", required=True)
+    pj.add_argument("--backend", required=True)
+    pj.add_argument("--judge-hardware", required=True)
+    pj.add_argument("--limit-queries", type=int, default=0)
+    pj.add_argument("--name", required=True)
+    pj.set_defaults(fn=cmd_judge_validate)
 
     args = p.parse_args(argv)
     args.fn(args)
