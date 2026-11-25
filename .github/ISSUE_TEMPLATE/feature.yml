@@ -6,7 +6,7 @@ body:
     id: context
     attributes:
       label: Context
-      description: Why this is needed and how it fits the plan (docs/PLAN.md).
+      description: Why this is needed and which milestone it belongs to.
     validations:
       required: true
   - type: textarea
