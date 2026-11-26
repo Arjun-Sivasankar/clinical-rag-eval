@@ -4,6 +4,9 @@ A biomedical question-answering RAG pipeline on PubMedQA, built to measure what 
 stage adds: BM25 vs dense vs Qdrant hybrid vs hybrid + cross-encoder reranking. It reports
 retrieval metrics, paired significance tests and per-stage latency, all on one laptop GPU.
 
+**Results page:** https://arjun-sivasankar.github.io/clinical-rag-eval/ (charts and tables,
+rebuilt from `results/` on every change).
+
 **Status:** retrieval (M1) and reranking (M2) are done. Generation with vLLM, RAGAS, the
 validated LLM judge, Langfuse tracing and the API come next; see the
 [milestones](https://github.com/Arjun-Sivasankar/clinical-rag-eval/milestones).
