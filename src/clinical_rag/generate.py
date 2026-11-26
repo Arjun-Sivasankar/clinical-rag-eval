@@ -39,6 +39,10 @@ _FIRST_WORD = re.compile(r"^\W*(yes|no|maybe)\b(?!\s*[|/])", re.I)
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
+class LLMError(RuntimeError):
+    """The generator server failed or could not be reached (after retries)."""
+
+
 @dataclass
 class Completion:
     text: str
@@ -84,8 +88,9 @@ class LLMClient:
     def chat(
         self, messages: list[dict], max_tokens: int = 256, temperature: float = 0.0
     ) -> Completion:
-        """One completion. Retries timeouts and 429/5xx with exponential backoff; other HTTP
-        errors raise with the server's message. Latency covers the successful attempt only."""
+        """One completion. Retries network errors, timeouts and 429/5xx with exponential
+        backoff; gives up with `LLMError` (carrying the server's message). Latency covers the
+        successful attempt only."""
         body = {
             "model": self.model,
             "messages": messages,
@@ -97,14 +102,14 @@ class LLMClient:
             t0 = time.perf_counter()
             try:
                 r = self._http.post("/chat/completions", json=body)
-            except httpx.TimeoutException:
+            except httpx.TransportError as e:  # connection refused, timeout, ...
                 if attempt == self.retries:
-                    raise
+                    raise LLMError(f"LLM server unreachable: {e!r}") from e
             else:
                 if r.status_code < 400:
                     break
                 if r.status_code not in RETRY_STATUS or attempt == self.retries:
-                    raise RuntimeError(f"LLM server returned {r.status_code}: {r.text[:500]}")
+                    raise LLMError(f"LLM server returned {r.status_code}: {r.text[:500]}")
             time.sleep(self.backoff_s * 2**attempt)
         data = r.json()
         usage = data.get("usage") or {}
