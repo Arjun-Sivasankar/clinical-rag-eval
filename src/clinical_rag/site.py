@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 from pathlib import Path
 
 from .config import REPO_ROOT, get_settings
@@ -43,8 +44,8 @@ def dot_plot(
     label_w, plot_w, row_h, top = 330, 560, 26, 24
     width, height = label_w + plot_w + 20, top + row_h * len(rows) + 28
 
-    def x(v: float) -> float:
-        return label_w + (v - lo) / (hi - lo) * plot_w
+    def x(v: float) -> float:  # clamped, so an out-of-range value never covers the labels
+        return label_w + min(max((v - lo) / (hi - lo), 0.0), 1.0) * plot_w
 
     parts = [f'<svg viewBox="0 0 {width} {height}" width="100%" role="img">']
     for t in ticks:
@@ -132,7 +133,7 @@ def _significance(results_dir: Path) -> str:
         return ""
     return (
         "<h2>Is it significant?</h2><p class='muted'>Paired exact McNemar tests on Recall@1 over "
-        "the 1,000 questions; Holm-adjusted within each family of comparisons.</p>"
+        "the per-query runs; Holm-adjusted within each family of comparisons.</p>"
         "<table><tr><th>Comparison</th><th>Recall@1 diff (points)</th>"
         f"<th>p</th><th>Holm p</th></tr>{''.join(items)}</table>"
     )
@@ -141,11 +142,27 @@ def _significance(results_dir: Path) -> str:
 def build_page(results_dir: Path) -> str:
     rows, hw = collect(results_dir)
     best = max(rows, key=lambda r: r["recall@1"])
-    bm25 = next(r for r in rows if r["label"].startswith("BM25"))
+    bm25 = next((r for r in rows if r["system"] == "bm25"), None)
+    n_queries = rows[0]["n_queries"]
+    corpus_path = results_dir / "m1_corpus_and_indexing.json"
+    n_docs = (
+        json.loads(corpus_path.read_text(encoding="utf-8"))["corpus"]["n_docs"]
+        if corpus_path.exists()
+        else None
+    )
     hardware = f"{hw.get('gpu', 'CPU')} ({hw.get('gpu_vram_gb', '?')} GB), {hw.get('platform')}"
-    recall_plot = dot_plot(rows, lambda r: r["recall@1"], ".2f", 0.6, 0.95, [0.6, 0.7, 0.8, 0.9])
+    # Recall axis: from the lowest tenth below the data (at most 0.6) up to 1.0.
+    r_lo = min(0.6, math.floor(min(r["recall@1"] for r in rows) * 10) / 10)
+    recall_plot = dot_plot(
+        rows,
+        lambda r: r["recall@1"],
+        ".1f",
+        r_lo,
+        1.0,
+        [round(r_lo + i / 10, 1) for i in range(round((1.0 - r_lo) * 10) + 1)],
+    )
     p95 = [r["latency_ms"]["total"]["p95"] for r in rows]
-    top = max(300.0, (max(p95) // 50 + 1) * 50)
+    top = max(300.0, math.ceil(max(p95) / 100) * 100)  # multiple of 100: exact quarter ticks
     latency_plot = dot_plot(
         rows,
         lambda r: r["latency_ms"]["total"]["p95"],
@@ -155,6 +172,8 @@ def build_page(results_dir: Path) -> str:
         [0, top / 4, top / 2, 3 * top / 4, top],
         " ms",
     )
+    vs_bm25 = f", up from {bm25['recall@1']:.3f} for BM25," if bm25 else ""
+    corpus = f" ({n_docs:,}-abstract corpus)" if n_docs else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -165,11 +184,11 @@ def build_page(results_dir: Path) -> str:
 <a href="{REPO_URL}">Code and data</a> ·
 <a href="{REPO_URL}/releases">Releases</a></p>
 <p class="hero">{best["recall@1"]:.3f} Recall@1</p>
-<p>{html.escape(best["label"])}, up from {bm25["recall@1"]:.3f} for BM25, at
+<p>{html.escape(best["label"])}{vs_bm25} at
 {best["latency_ms"]["total"]["p95"]:.0f} ms p95 end to end.</p>
 <h2>Retrieval quality: Recall@1</h2>
-<p class="muted">Share of the 1,000 questions whose gold abstract is ranked first
-(62,249-abstract corpus). Hover a row for its value.</p>
+<p class="muted">Share of the {n_queries:,} questions whose gold abstract is ranked
+first{corpus}. Hover a row for its value.</p>
 {recall_plot}
 <h2>Latency: end-to-end p95</h2>
 <p class="muted">One query at a time: query encoding + Qdrant search + reranking. Systems in one

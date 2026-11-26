@@ -98,3 +98,14 @@ def test_markdown_table_uses_the_same_rows(results):
     md = build(results)
     data_rows = [ln for ln in md.splitlines()[2:] if ln.startswith("| ")]  # after header + |---|
     assert len(data_rows) == len(ROWS)
+
+
+def test_dot_plot_clamps_out_of_range_values():
+    svg = dot_plot([{"label": "low", "v": 0.1}], lambda r: r["v"], ".1f", 0.6, 1.0, [0.6, 1.0])
+    assert re.findall(r'cx="([\d.]+)"', svg) == ["330.0"]  # pinned to the axis start
+
+
+def test_page_counts_come_from_results(results):
+    page = build_page(results)
+    assert "Share of the 3 questions" in page  # n_queries from the fixture
+    assert "up from 0.700 for BM25" in page  # BM25 found by system id

@@ -8,6 +8,7 @@ on:
       - "results/**"
       - "src/clinical_rag/site.py"
       - "src/clinical_rag/report.py"
+      - "src/clinical_rag/config.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
