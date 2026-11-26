@@ -39,6 +39,9 @@ def samples_from_generations(
         response = strip_think(r["raw"])
         if not response:
             continue
+        missing = [p for p in r["contexts"] if p not in parents]
+        if missing:
+            raise KeyError(f"question {r['qid']}: abstracts {missing} not in docs.parquet")
         samples.append(
             {
                 "qid": r["qid"],
@@ -122,6 +125,40 @@ async def score_samples(samples: Sequence[dict], metrics: dict, concurrency: int
             return await _score_one(sample, metrics)
 
     return list(await asyncio.gather(*(run(s) for s in samples)))
+
+
+class EvaluatorDown(RuntimeError):
+    """The evaluator endpoint is unreachable or every metric failed on a whole batch."""
+
+
+def check_endpoint(base_url: str, timeout: float = 10.0) -> None:
+    """Fail fast on a wrong URL or a server that is down, before any sample is scored."""
+    import httpx
+
+    try:
+        httpx.get(base_url.rstrip("/") + "/models", timeout=timeout).raise_for_status()
+    except httpx.HTTPError as e:
+        raise EvaluatorDown(f"evaluator at {base_url} not usable: {e!r}") from e
+
+
+def all_failed(row: dict, metrics: Sequence[str]) -> bool:
+    return all(math.isnan(row.get(m, float("nan"))) for m in metrics)
+
+
+async def score_in_batches(
+    samples: Sequence[dict], metrics: dict, batch: int, workers: int, on_batch
+) -> None:
+    """Score in batches inside ONE event loop (the async client is bound to it) and hand each
+    batch's rows to `on_batch`. Rows where every metric failed are not handed on, so a resumed
+    run retries them; a batch where every row failed means a systematic problem (wrong model,
+    server down) and stops the run with the first error."""
+    for i in range(0, len(samples), batch):
+        rows = await score_samples(samples[i : i + batch], metrics, workers)
+        ok = [r for r in rows if not all_failed(r, list(metrics))]
+        if rows and not ok:
+            first = next((v for k, v in rows[0].items() if k.endswith("_error")), "unknown")
+            raise EvaluatorDown(f"every metric failed on a whole batch; first error: {first}")
+        on_batch(ok)
 
 
 def summarise_scores(scores: Sequence[dict], metrics: Sequence[str] = METRICS) -> dict:

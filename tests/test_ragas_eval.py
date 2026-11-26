@@ -124,3 +124,39 @@ def test_bad_evaluator_reply_becomes_nan_with_error():
     [s] = asyncio.run(score_samples(samples, _metrics(StubLLM(broken))))
     assert math.isnan(s["faithfulness"]) and "faithfulness_error" in s
     assert s["context_recall"] == pytest.approx(2 / 3)  # other metrics still scored
+
+
+def test_whole_batch_failure_stops_and_saves_nothing():
+    from clinical_rag.ragas_eval import EvaluatorDown, score_in_batches
+
+    class DownLLM(StubLLM):
+        def generate(self, prompt, response_model):
+            raise ConnectionError("evaluator down")
+
+    samples = samples_from_generations(ROWS, QUESTIONS, REFERENCES, PARENTS)
+    saved = []
+    with pytest.raises(EvaluatorDown, match="evaluator down"):
+        asyncio.run(score_in_batches(samples, _metrics(DownLLM({})), 1, 1, saved.extend))
+    assert saved == []  # nothing marked done, so a resumed run retries
+
+
+def test_batches_save_partial_failures_and_skip_all_failed_rows():
+    from clinical_rag.ragas_eval import all_failed, score_in_batches
+
+    samples = samples_from_generations(ROWS, QUESTIONS, REFERENCES, PARENTS) * 2
+    saved = []
+    asyncio.run(score_in_batches(samples, _metrics(StubLLM(REPLIES)), 1, 1, saved.extend))
+    names = ["faithfulness", "context_recall", "answer_correctness"]
+    assert len(saved) == 2 and not any(all_failed(r, names) for r in saved)
+
+
+def test_missing_parent_abstract_is_a_clear_error():
+    with pytest.raises(KeyError, match="not in docs.parquet"):
+        samples_from_generations(ROWS, QUESTIONS, REFERENCES, {"10": "only one"})
+
+
+def test_check_endpoint_fails_fast():
+    from clinical_rag.ragas_eval import EvaluatorDown, check_endpoint
+
+    with pytest.raises(EvaluatorDown):
+        check_endpoint("http://127.0.0.1:9/v1", timeout=0.5)  # nothing listens on port 9

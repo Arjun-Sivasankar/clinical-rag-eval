@@ -365,11 +365,12 @@ def cmd_ragas(args) -> None:
 
     from .rag import open_run
     from .ragas_eval import (
+        check_endpoint,
         make_embeddings,
         make_llm,
         make_metrics,
         samples_from_generations,
-        score_samples,
+        score_in_batches,
         summarise_scores,
     )
 
@@ -388,24 +389,34 @@ def cmd_ragas(args) -> None:
     config = {
         "generations": args.generations,
         "evaluator": args.model,
+        "evaluator_backend": args.backend,
+        "evaluator_hardware": args.evaluator_hardware,
         "embeddings": args.embeddings,
         "ragas": version("ragas"),
     }
     done = open_run(rows_path, config)
     todo = [x for x in samples if x["qid"] not in done]
-    metrics = make_metrics(make_llm(args.base_url, args.model), make_embeddings(args.embeddings))
+    check_endpoint(args.base_url)  # fail fast on a wrong URL or a server that is down
+
     with open(rows_path, "a", encoding="utf-8", newline="\n") as f:
-        for i in range(0, len(todo), args.batch):  # batches, so progress is saved as it goes
-            for row in asyncio.run(score_samples(todo[i : i + args.batch], metrics, args.workers)):
+
+        def save(rows):
+            for row in rows:
                 f.write(json.dumps(row) + "\n")
                 done[row["qid"]] = row
             f.flush()
             log.info("ragas: %d/%d scored", len(done), len(samples))
+
+        async def run():  # one event loop for the whole run; the async client is bound to it
+            metrics = make_metrics(
+                make_llm(args.base_url, args.model), make_embeddings(args.embeddings)
+            )
+            await score_in_batches(todo, metrics, args.batch, args.workers, save)
+
+        asyncio.run(run())
     scores = [done[x["qid"]] for x in samples if x["qid"] in done]
     meta = {
         **config,
-        "evaluator_backend": args.backend,
-        "evaluator_hardware": args.evaluator_hardware,
         "finished_utc": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     (s.results_dir / f"{args.name}.json").write_text(
