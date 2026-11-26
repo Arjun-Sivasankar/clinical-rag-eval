@@ -357,6 +357,76 @@ def cmd_judge_validate(args) -> None:
     log.info("%s: accuracy %.3f kappa %.3f", args.name, result["accuracy"], result["cohen_kappa"])
 
 
+def cmd_ragas(args) -> None:
+    """RAGAS scores for a `crag generate` run. Resumable: scored qids are skipped."""
+    import asyncio
+    from datetime import UTC, datetime
+    from importlib.metadata import version
+
+    from .rag import open_run
+    from .ragas_eval import (
+        check_endpoint,
+        make_embeddings,
+        make_llm,
+        make_metrics,
+        samples_from_generations,
+        score_in_batches,
+        summarise_scores,
+    )
+
+    s = get_settings()
+    gen_rows = [
+        json.loads(line)
+        for line in (s.results_dir / f"{args.generations}.jsonl").read_text("utf-8").splitlines()
+    ]
+    queries = pd.read_parquet(s.data_dir / "queries.parquet").set_index("qid")
+    samples = samples_from_generations(
+        gen_rows, queries["question"], queries["long_answer"], _load_parents()
+    )
+    if args.limit:
+        samples = samples[: args.limit]
+    rows_path = s.results_dir / f"{args.name}.jsonl"
+    config = {
+        "generations": args.generations,
+        "evaluator": args.model,
+        "evaluator_backend": args.backend,
+        "evaluator_hardware": args.evaluator_hardware,
+        "embeddings": args.embeddings,
+        "ragas": version("ragas"),
+    }
+    done = open_run(rows_path, config)
+    todo = [x for x in samples if x["qid"] not in done]
+    check_endpoint(args.base_url)  # fail fast on a wrong URL or a server that is down
+
+    with open(rows_path, "a", encoding="utf-8", newline="\n") as f:
+
+        def save(rows):
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+                done[row["qid"]] = row
+            f.flush()
+            log.info("ragas: %d/%d scored", len(done), len(samples))
+
+        async def run():  # one event loop for the whole run; the async client is bound to it
+            metrics = make_metrics(
+                make_llm(args.base_url, args.model), make_embeddings(args.embeddings)
+            )
+            await score_in_batches(todo, metrics, args.batch, args.workers, save)
+
+        asyncio.run(run())
+    scores = [done[x["qid"]] for x in samples if x["qid"] in done]
+    meta = {
+        **config,
+        "finished_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    (s.results_dir / f"{args.name}.json").write_text(
+        json.dumps({"meta": meta, "summary": summarise_scores(scores)}, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    log.info("%s: %s", args.name, summarise_scores(scores))
+
+
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -413,6 +483,19 @@ def main(argv: list[str] | None = None) -> None:
     pj.add_argument("--limit-queries", type=int, default=0)
     pj.add_argument("--name", required=True)
     pj.set_defaults(fn=cmd_judge_validate)
+
+    pr = sub.add_parser("ragas", help="RAGAS scores for a generate run (needs the eval extra)")
+    pr.add_argument("--generations", required=True, help="name of a `generate` run in results/")
+    pr.add_argument("--base-url", required=True, help="evaluator LLM, OpenAI-compatible")
+    pr.add_argument("--model", required=True)
+    pr.add_argument("--backend", required=True)
+    pr.add_argument("--evaluator-hardware", required=True)
+    pr.add_argument("--embeddings", default="BAAI/bge-small-en-v1.5")
+    pr.add_argument("--workers", type=int, default=2, help="concurrent samples")
+    pr.add_argument("--batch", type=int, default=20, help="samples per saved batch")
+    pr.add_argument("--limit", type=int, default=0)
+    pr.add_argument("--name", required=True)
+    pr.set_defaults(fn=cmd_ragas)
 
     args = p.parse_args(argv)
     args.fn(args)
