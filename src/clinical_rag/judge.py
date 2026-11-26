@@ -32,7 +32,8 @@ def judge_messages(question: str, text: str) -> list[dict]:
 
 def judge(llm: LLMClient, question: str, text: str) -> tuple[str | None, str, float]:
     """(label or None, raw reply, latency in ms)."""
-    c = llm.chat(judge_messages(question, text), max_tokens=16)
+    # 32 tokens: room for an empty <think></think> block before the one-line answer
+    c = llm.chat(judge_messages(question, text), max_tokens=32)
     return parse_label(c.text), c.text, c.latency_ms
 
 
@@ -56,6 +57,8 @@ def cohen_kappa(gold: Sequence[str], pred: Sequence[str | None]) -> float:
 
 
 def agreement(gold: Sequence[str], pred: Sequence[str | None]) -> dict:
+    if not gold:
+        raise ValueError("no judged rows to compare")
     return {
         "n": len(gold),
         "accuracy": float(np.mean([g == p for g, p in zip(gold, pred, strict=True)])),

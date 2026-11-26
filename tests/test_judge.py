@@ -40,10 +40,27 @@ def test_judge_reads_label_from_fake_server():
     label, raw, ms = judge(llm, "Does X work?", "Results were inconsistent across trials.")
     assert label == "maybe" and raw == "Answer: maybe" and ms >= 0
     user = seen[0]["messages"][-1]["content"]
-    assert "Does X work?" in user and "inconsistent" in user and seen[0]["max_tokens"] == 16
+    assert "Does X work?" in user and "inconsistent" in user and seen[0]["max_tokens"] == 32
 
 
 def test_judge_messages_format():
     msgs = judge_messages("Q?", "T.")
     assert msgs[0]["role"] == "system" and "yes | no | maybe" in msgs[0]["content"]
     assert msgs[1]["content"].endswith("/no_think")
+
+
+def test_kappa_with_unparsed_predictions():
+    gold = ["yes", "yes", "no", "no"]
+    # po = 0.5 (rows 1, 3); pred shares: yes 0.25, no 0.25 (None is in no label's share)
+    # pe = 0.5*0.25 + 0.5*0.25 = 0.25 -> kappa = (0.5 - 0.25) / 0.75 = 1/3
+    assert cohen_kappa(gold, ["yes", None, "no", None]) == pytest.approx(1 / 3)
+
+
+def test_agreement_rejects_empty():
+    with pytest.raises(ValueError):
+        agreement([], [])
+
+
+def test_judge_prompt_has_only_question_and_text():
+    user = judge_messages("Q?", "reference conclusion")[1]["content"]
+    assert user == "Question: Q?\n\nText: reference conclusion\n/no_think"
