@@ -51,14 +51,10 @@ def _pair(lat: dict, stage: str) -> str:
     return f"{lat[stage]['p50']:.0f} / {lat[stage]['p95']:.0f}" if stage in lat else "-"
 
 
-def build(results_dir: Path) -> str:
+def collect(results_dir: Path) -> tuple[list[dict], dict]:
+    """(one dict per table row: label + that system's summary, hardware of the first file)."""
     cache: dict[str, dict] = {}
-    lines = [
-        "| Pipeline | Recall@1 | Recall@5 | Recall@10 | MRR@10 | nDCG@10 "
-        "| Rerank p50 / p95 (ms) | End-to-end p50 / p95 (ms) |",
-        "|---|---|---|---|---|---|---|---|",
-    ]
-    hw = None
+    rows, hw = [], {}
     for label, stem, system in ROWS:
         path = results_dir / f"{stem}.json"
         if not path.exists():
@@ -68,9 +64,21 @@ def build(results_dir: Path) -> str:
         data = cache[stem]
         hw = hw or data["meta"]["hardware"]
         s = next(x for x in data["summaries"] if x["system"] == system)
+        rows.append({"label": label, "source": stem, **s})
+    return rows, hw
+
+
+def build(results_dir: Path) -> str:
+    rows, hw = collect(results_dir)
+    lines = [
+        "| Pipeline | Recall@1 | Recall@5 | Recall@10 | MRR@10 | nDCG@10 "
+        "| Rerank p50 / p95 (ms) | End-to-end p50 / p95 (ms) |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for s in rows:
         lat = s["latency_ms"]
         lines.append(
-            f"| {label} | {s['recall@1']:.3f} | {s['recall@5']:.3f} | {s['recall@10']:.3f} "
+            f"| {s['label']} | {s['recall@1']:.3f} | {s['recall@5']:.3f} | {s['recall@10']:.3f} "
             f"| {s['mrr@10']:.3f} | {s['ndcg@10']:.3f} | {_pair(lat, 'rerank')} "
             f"| {_pair(lat, 'total')} |"
         )
