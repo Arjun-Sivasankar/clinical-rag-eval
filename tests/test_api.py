@@ -84,3 +84,54 @@ def test_components_built_once(retriever):
     c.post("/search", json={"question": "aspirin"})
     c.post("/search", json={"question": "statins"})
     assert len(calls) == 1
+
+
+def test_concurrent_first_requests_build_components_once(retriever):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    calls, lock = [], threading.Lock()
+
+    def slow_factory():
+        with lock:
+            calls.append(1)
+        time.sleep(0.2)  # widen the race window
+        return retriever
+
+    c = TestClient(create_app(slow_factory, lambda: PARENTS))
+    with ThreadPoolExecutor(4) as ex:
+        codes = list(
+            ex.map(
+                lambda q: c.post("/search", json={"question": q}).status_code,
+                ["aspirin", "statins", "vitamin d", "exercise"],
+            )
+        )
+    assert codes == [200] * 4 and len(calls) == 1
+
+
+def test_generator_down_is_502(retriever):
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    llm = LLMClient(
+        "http://fake/v1", "m", retries=1, backoff_s=0, transport=httpx.MockTransport(handler)
+    )
+    r = _client(retriever, llm).post("/answer", json={"question": "Is aspirin risky?"})
+    assert r.status_code == 502 and "unreachable" in r.json()["detail"]
+
+
+def test_retrieval_backend_down_is_503(retriever):
+    def broken_factory():
+        raise FileNotFoundError("data/docs.parquet")
+
+    c = TestClient(create_app(lambda: retriever, broken_factory))
+    r = c.post("/search", json={"question": "aspirin"})
+    assert r.status_code == 503 and "parents unavailable" in r.json()["detail"]
+
+
+def test_answer_unknown_system_is_422(retriever):
+    r = _client(retriever, _llm()).post(
+        "/answer", json={"question": "Is aspirin risky?", "system": "nope"}
+    )
+    assert r.status_code == 422

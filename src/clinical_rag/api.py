@@ -9,18 +9,24 @@ clinical_rag.api:app` builds the real ones from settings on first use:
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
-from .generate import LLMClient
+from .generate import LLMClient, LLMError
 from .rag import RAGPipeline
 from .retrieve import Retriever
 
 DEFAULT_SYSTEM = "hybrid_dbsf+rerank_parent"
+# Backend failures that are not the caller's fault: network/server errors from Qdrant or the
+# generator, missing model or index files (OSError covers FileNotFoundError, ConnectionError).
+BACKEND_ERRORS = (httpx.HTTPError, OSError, UnexpectedResponse, ResponseHandlingException)
 
 
 class SearchRequest(BaseModel):
@@ -43,6 +49,7 @@ class SearchResponse(BaseModel):
 
 class AnswerRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
+    system: str = DEFAULT_SYSTEM
     rewrite: bool = False
     top_k: int = Field(3, ge=1, le=10)
 
@@ -61,13 +68,23 @@ def create_app(
     parents_factory: Callable[[], Mapping[str, str]],
     llm_factory: Callable[[], LLMClient | None] = lambda: None,
 ) -> FastAPI:
-    """Build the app. Components are created once, on the first request that needs them."""
+    """Build the app. Components are created once, on the first request that needs them.
+
+    Errors: bad input or an unknown system -> 422; generator failure -> 502; retrieval backend
+    (Qdrant, model files, index data) unavailable -> 503.
+    """
     app = FastAPI(title="clinical-rag-eval", version="0.3.0")
     cache: dict = {}
+    lock = threading.Lock()  # sync endpoints run in a thread pool
 
     def get(name, factory):
         if name not in cache:
-            cache[name] = factory()
+            with lock:
+                if name not in cache:  # another request may have built it meanwhile
+                    try:
+                        cache[name] = factory()
+                    except BACKEND_ERRORS as e:
+                        raise HTTPException(503, f"{name} unavailable: {e}") from e
         return cache[name]
 
     @app.get("/health")
@@ -82,13 +99,18 @@ def create_app(
             res = retriever.search(req.system, req.question, limit=100)
         except ValueError as e:  # unknown system or missing reranker
             raise HTTPException(status_code=422, detail=str(e)) from e
+        except BACKEND_ERRORS as e:
+            raise HTTPException(503, f"retrieval backend unavailable: {e}") from e
+        # Hits are best-first and scored by the last stage (the reranker when one ran);
+        # keep the first score per abstract. Abstracts without text are skipped.
         best: dict[str, float] = {}
-        for h in res.hits:  # hits are best-first; keep the first (best) score per abstract
+        for h in res.hits:
             best.setdefault(h.pmid, h.score)
         abstracts = [
-            Abstract(pmid=p, score=best[p], text=parents.get(p, ""))
-            for p in res.ranked_pmids()[: req.k]
-        ]
+            Abstract(pmid=p, score=best[p], text=parents[p])
+            for p in res.ranked_pmids()
+            if p in parents
+        ][: req.k]
         return SearchResponse(system=req.system, abstracts=abstracts, timings_ms=res.timings_ms)
 
     @app.post("/answer", response_model=AnswerResponse)
@@ -102,11 +124,18 @@ def create_app(
             get("retriever", retriever_factory),
             llm,
             get("parents", parents_factory),
-            system=DEFAULT_SYSTEM,
+            system=req.system,
             top_k=req.top_k,
             rewrite=req.rewrite,
         )
-        out = pipe.run(req.question)
+        try:
+            out = pipe.run(req.question)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        except LLMError as e:
+            raise HTTPException(502, f"generator error: {e}") from e
+        except BACKEND_ERRORS as e:
+            raise HTTPException(503, f"backend unavailable: {e}") from e
         return AnswerResponse(
             label=out["label"],
             explanation=out["explanation"],
