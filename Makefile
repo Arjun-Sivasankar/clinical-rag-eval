@@ -4,7 +4,7 @@ ifeq ($(OS),)
 PY = .venv/bin/python
 endif
 
-.PHONY: setup qdrant prepare index eval-retrieval eval-rerank report eval test lint
+.PHONY: setup qdrant prepare index eval-retrieval eval-rerank report site eval test lint
 
 setup:            ## venv with CUDA 12.8 PyTorch (RTX 50xx) + project
 	uv venv --python 3.12 .venv
@@ -34,6 +34,9 @@ eval-rerank:      ## M2: + cross-encoder rerank of chunks / parent abstracts -> 
 
 report:           ## results table -> results/summary.md and the README
 	$(PY) -m clinical_rag.report
+
+site:             ## results page -> site/index.html (deployed to GitHub Pages by CI)
+	$(PY) -m clinical_rag.site
 
 eval: prepare index eval-retrieval eval-rerank report
 
